@@ -1,0 +1,17 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "trade-bro-backend",
+      "runtimeExecutable": "bash",
+      "runtimeArgs": ["-c", "cd backend && python3 -m uvicorn main:app --reload --host 0.0.0.0 --port 8000"],
+      "port": 8000
+    },
+    {
+      "name": "trade-bro-frontend",
+      "runtimeExecutable": "bash",
+      "runtimeArgs": ["-c", "cd frontend && npx vite --port 5173 --host"],
+      "port": 5173
+    }
+  ]
+}
