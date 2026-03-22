@@ -1,32 +1,35 @@
 """Detector 12 — Greeks Anomaly. Detects abnormal Delta/Gamma/Vega before price moves."""
 import math
 
+_SQRT2PI = math.sqrt(2 * math.pi)
+
+def _norm_cdf(x):
+    """Standard normal CDF using math.erfc — no scipy needed."""
+    return 0.5 * math.erfc(-x / math.sqrt(2))
+
+def _norm_pdf(x):
+    """Standard normal PDF."""
+    return math.exp(-0.5 * x * x) / _SQRT2PI
 
 def _bs_delta(S, K, T, r, sigma, option_type="CE"):
-    """Simplified Black-Scholes delta."""
     if T <= 0 or sigma <= 0:
         return 0.5
     d1 = (math.log(S / K) + (r + 0.5 * sigma**2) * T) / (sigma * math.sqrt(T))
-    from scipy.stats import norm
     if option_type == "CE":
-        return norm.cdf(d1)
-    return norm.cdf(d1) - 1
-
+        return _norm_cdf(d1)
+    return _norm_cdf(d1) - 1
 
 def _bs_gamma(S, K, T, r, sigma):
     if T <= 0 or sigma <= 0:
         return 0
     d1 = (math.log(S / K) + (r + 0.5 * sigma**2) * T) / (sigma * math.sqrt(T))
-    from scipy.stats import norm
-    return norm.pdf(d1) / (S * sigma * math.sqrt(T))
-
+    return _norm_pdf(d1) / (S * sigma * math.sqrt(T))
 
 def _bs_vega(S, K, T, r, sigma):
     if T <= 0 or sigma <= 0:
         return 0
     d1 = (math.log(S / K) + (r + 0.5 * sigma**2) * T) / (sigma * math.sqrt(T))
-    from scipy.stats import norm
-    return S * norm.pdf(d1) * math.sqrt(T) / 100
+    return S * _norm_pdf(d1) * math.sqrt(T) / 100
 
 
 def detect(data: dict) -> dict:
