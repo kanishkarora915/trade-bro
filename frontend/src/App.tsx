@@ -47,6 +47,10 @@ export default function App() {
           <div className="w-10 h-10 border-3 border-neon-cyan/30 border-t-neon-cyan rounded-full animate-spin mx-auto mb-4" />
           <p className="text-neon-cyan text-sm font-semibold">Authenticated! Connecting to TRADE BRO...</p>
           <p className="text-tb-muted/50 text-[10px] mt-2">Loading option chain from Kite API (first load ~10s)</p>
+          <button onClick={() => { localStorage.clear(); window.location.reload() }}
+            className="mt-6 text-[10px] text-tb-muted hover:text-neon-red border border-tb-border px-3 py-1.5 rounded transition-all">
+            Stuck? Click to re-login
+          </button>
         </div>
       </div>
     )

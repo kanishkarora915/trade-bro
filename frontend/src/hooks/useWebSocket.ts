@@ -75,6 +75,7 @@ export function useWebSocket(sessionId: string | null) {
   const wsRef = useRef<WebSocket | null>(null)
   const timer = useRef<number>()
   const pingT = useRef(0)
+  const retries = useRef(0)
 
   const connect = useCallback(() => {
     if (!sessionId) return
@@ -87,6 +88,7 @@ export function useWebSocket(sessionId: string | null) {
     const ws = new WebSocket(`${proto}//${wsHost}/ws/${sessionId}`)
     ws.onopen = () => {
       setConnected(true)
+      retries.current = 0
       const ping = () => { if (ws.readyState === 1) { pingT.current = performance.now(); ws.send('ping') } }
       timer.current = window.setInterval(ping, 8000)
       ping()
@@ -95,7 +97,30 @@ export function useWebSocket(sessionId: string | null) {
       if (ev.data === 'pong') { setLatency(Math.round(performance.now() - pingT.current)); return }
       try { const d = JSON.parse(ev.data); if (d.spot !== undefined) setState(d) } catch {}
     }
-    ws.onclose = () => { setConnected(false); clearInterval(timer.current); setTimeout(connect, 3000) }
+    ws.onclose = (ev) => {
+      setConnected(false)
+      clearInterval(timer.current)
+      // 4001 = session expired/invalid — clear and force re-login
+      if (ev.code === 4001) {
+        console.warn('[WS] Session expired — clearing auth')
+        localStorage.removeItem('tb_session')
+        localStorage.removeItem('tb_session_id')
+        localStorage.removeItem('tb_step')
+        window.location.reload()
+        return
+      }
+      // Retry with backoff, max 5 retries then force re-login
+      retries.current++
+      if (retries.current > 5) {
+        console.warn('[WS] Max retries — clearing auth')
+        localStorage.removeItem('tb_session')
+        localStorage.removeItem('tb_session_id')
+        localStorage.removeItem('tb_step')
+        window.location.reload()
+        return
+      }
+      setTimeout(connect, Math.min(3000 * retries.current, 10000))
+    }
     ws.onerror = () => ws.close()
     wsRef.current = ws
   }, [sessionId])
