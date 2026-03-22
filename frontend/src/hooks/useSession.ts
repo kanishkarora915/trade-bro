@@ -11,19 +11,44 @@ export interface Session {
   has_api_key: boolean
 }
 
+function loadStep(): AuthStep {
+  const saved = localStorage.getItem('tb_step') as AuthStep | null
+  if (saved && ['kite_credentials', 'kite_login', 'authenticated'].includes(saved)) {
+    return saved
+  }
+  return 'license'
+}
+
+function loadSession(): Session | null {
+  const s = localStorage.getItem('tb_session')
+  if (s) {
+    try { return JSON.parse(s) } catch { return null }
+  }
+  return null
+}
+
 export function useSession() {
-  const [step, setStep] = useState<AuthStep>(() => {
-    const saved = sessionStorage.getItem('tb_session_id')
-    const savedStep = sessionStorage.getItem('tb_step') as AuthStep
-    return saved && savedStep === 'authenticated' ? 'authenticated' : 'license'
-  })
-  const [session, setSession] = useState<Session | null>(() => {
-    const s = sessionStorage.getItem('tb_session')
-    return s ? JSON.parse(s) : null
-  })
+  const [step, setStepState] = useState<AuthStep>(loadStep)
+  const [session, setSessionState] = useState<Session | null>(loadSession)
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
-  const [loginUrl, setLoginUrl] = useState('')
+  const [loginUrl, setLoginUrl] = useState(() => localStorage.getItem('tb_login_url') || '')
+
+  const setStep = (s: AuthStep) => {
+    setStepState(s)
+    localStorage.setItem('tb_step', s)
+  }
+
+  const setSession = (sess: Session | null) => {
+    setSessionState(sess)
+    if (sess) {
+      localStorage.setItem('tb_session', JSON.stringify(sess))
+      localStorage.setItem('tb_session_id', sess.session_id)
+    } else {
+      localStorage.removeItem('tb_session')
+      localStorage.removeItem('tb_session_id')
+    }
+  }
 
   const verifyLicense = useCallback(async (key: string) => {
     setLoading(true)
@@ -41,15 +66,12 @@ export function useSession() {
       }
       const sess = data.session as Session
       setSession(sess)
-      sessionStorage.setItem('tb_session_id', sess.session_id)
-      sessionStorage.setItem('tb_session', JSON.stringify(sess))
       if (sess.is_authenticated) {
         setStep('authenticated')
-        sessionStorage.setItem('tb_step', 'authenticated')
       } else {
         setStep('kite_credentials')
       }
-    } catch (e: any) {
+    } catch {
       setError('Server offline. Check connection.')
     } finally {
       setLoading(false)
@@ -69,6 +91,7 @@ export function useSession() {
       const data = await r.json()
       if (data.login_url) {
         setLoginUrl(data.login_url)
+        localStorage.setItem('tb_login_url', data.login_url)
         setStep('kite_login')
       } else {
         setError('Failed to set credentials')
@@ -94,8 +117,6 @@ export function useSession() {
       if (data.authenticated) {
         const updated = { ...session, is_authenticated: true }
         setSession(updated)
-        sessionStorage.setItem('tb_session', JSON.stringify(updated))
-        sessionStorage.setItem('tb_step', 'authenticated')
         setStep('authenticated')
       } else {
         setError(data.detail || 'Auth failed')
@@ -111,9 +132,12 @@ export function useSession() {
     if (session) {
       fetch(`${API}/api/logout/${session.session_id}`, { method: 'POST' }).catch(() => {})
     }
-    sessionStorage.clear()
+    localStorage.removeItem('tb_session')
+    localStorage.removeItem('tb_session_id')
+    localStorage.removeItem('tb_step')
+    localStorage.removeItem('tb_login_url')
     setSession(null)
-    setStep('license')
+    setStepState('license')
     setError('')
     setLoginUrl('')
   }, [session])
