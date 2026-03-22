@@ -12,9 +12,11 @@ export default function StrikeDetail({ chain, atm, onClose }: { chain: ChainRow[
         {!chain || chain.length === 0 ? (
           <div className="flex-1 flex items-center justify-center">
             <div className="text-center py-12">
-              <p className="text-tb-muted text-lg mb-2">Chain data loading...</p>
-              <p className="text-tb-muted/50 text-xs">Option chain will appear once Kite API responds. This may take a few seconds on first load.</p>
-              <p className="text-tb-muted/40 text-[10px] mt-3">If market is closed, last trading day data will show after the first data cycle (30s).</p>
+              <div className="w-8 h-8 border-2 border-neon-cyan/30 border-t-neon-cyan rounded-full animate-spin mx-auto mb-4" />
+              <p className="text-tb-muted text-lg mb-2">Loading Option Chain...</p>
+              <p className="text-tb-muted/50 text-xs">Fetching live data from Kite API. First load takes ~10s.</p>
+              <p className="text-tb-muted/40 text-[10px] mt-3">Weekend/Holiday: Shows last trading day's closing data.</p>
+              <button onClick={onClose} className="mt-4 text-[10px] text-neon-red border border-neon-red/30 px-3 py-1 rounded hover:bg-neon-red/10">Close & Retry</button>
             </div>
           </div>
         ) : (

@@ -92,9 +92,19 @@ class KiteClient:
         if expiry:
             opts = [i for i in opts if i.get("expiry") == expiry]
         else:
-            expiries = sorted(set(i["expiry"] for i in opts))
-            if expiries:
-                opts = [i for i in opts if i["expiry"] == expiries[0]]
+            # CRITICAL: Filter out expired expiries (fixes weekend/holiday loading)
+            today_str = datetime.now().strftime("%Y-%m-%d")
+            all_expiries = sorted(set(i["expiry"] for i in opts))
+            future_expiries = [e for e in all_expiries if e >= today_str]
+            # If no future expiry found, use the most recent past one (for after-hours data)
+            if future_expiries:
+                nearest = future_expiries[0]
+            elif all_expiries:
+                nearest = all_expiries[-1]  # most recent past expiry
+            else:
+                return []
+            opts = [i for i in opts if i["expiry"] == nearest]
+            print(f"[KITE] {name} expiry selected: {nearest} (today={today_str}, total={len(all_expiries)}, future={len(future_expiries)})")
         return opts
 
     async def get_quote(self, instruments: list[str]) -> dict:
@@ -128,6 +138,10 @@ class KiteClient:
     async def build_option_chain(self, spot_price: float, expiry: str | None = None,
                                   name: str = "NIFTY", strike_step: int = 50, chain_range: int = 500) -> dict:
         opts = await self.get_options(name, expiry)
+        if not opts:
+            print(f"[KITE] WARNING: No options found for {name} — returning empty chain")
+            atm = round(spot_price / strike_step) * strike_step
+            return {"atm": atm, "expiry": "", "chain": {}, "timestamp": datetime.now().isoformat()}
         atm = round(spot_price / strike_step) * strike_step
 
         # Tighter range for faster fetching — ±10 strikes is enough for detectors
