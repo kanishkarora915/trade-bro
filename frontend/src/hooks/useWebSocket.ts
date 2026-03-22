@@ -78,9 +78,13 @@ export function useWebSocket(sessionId: string | null) {
 
   const connect = useCallback(() => {
     if (!sessionId) return
-    const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-    const host = import.meta.env.VITE_API_URL ? new URL(import.meta.env.VITE_API_URL).host : window.location.host
-    const ws = new WebSocket(`${proto}//${host}/ws/${sessionId}`)
+    // WebSocket must connect DIRECTLY to Render backend — Netlify doesn't proxy WebSocket
+    const isLocal = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'
+    const wsHost = import.meta.env.VITE_API_URL
+      ? new URL(import.meta.env.VITE_API_URL).host
+      : (isLocal ? window.location.host : 'trade-bro-api.onrender.com')
+    const proto = isLocal ? 'ws:' : 'wss:'
+    const ws = new WebSocket(`${proto}//${wsHost}/ws/${sessionId}`)
     ws.onopen = () => {
       setConnected(true)
       const ping = () => { if (ws.readyState === 1) { pingT.current = performance.now(); ws.send('ping') } }
