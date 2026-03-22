@@ -35,7 +35,8 @@ user_tickers: dict[str, KiteTicker] = {}  # session_id -> KiteTicker
 
 
 async def data_loop(session_id: str):
-    """Background loop per authenticated user — runs detectors every 30s with real tick data."""
+    """Background loop per authenticated user — runs detectors every cycle."""
+    first_run = True
     while True:
         try:
             sess = session_mgr.get_session(session_id)
@@ -59,7 +60,13 @@ async def data_loop(session_id: str):
 
         except Exception as e:
             print(f"[TRADE BRO] Loop error for {session_id[:8]}: {e}")
-        await asyncio.sleep(REFRESH_OPTION_CHAIN_SEC)
+
+        # First run: short delay then continue. After that: normal interval.
+        if first_run:
+            first_run = False
+            await asyncio.sleep(5)  # quick second update after 5s
+        else:
+            await asyncio.sleep(REFRESH_OPTION_CHAIN_SEC)
 
 
 async def start_ticker(session_id: str, api_key: str, access_token: str):
@@ -93,8 +100,10 @@ def start_user_loop(session_id: str):
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     print(f"[TRADE BRO] Backend v3 started on port {PORT}")
+    # Pre-warm: instruments cache loads on first authenticated user's API call
+    # No pre-warm needed since instruments are user-specific (need access_token)
+    print("[TRADE BRO] Ready — instruments will cache on first user login")
     yield
-    # Cleanup on shutdown
     for t in bg_tasks.values():
         t.cancel()
     for sid in list(user_tickers.keys()):
@@ -239,11 +248,18 @@ async def websocket_endpoint(ws: WebSocket, session_id: str):
         await start_ticker(session_id, sess.kite_api_key, sess.kite_access_token)
 
     try:
-        # Send current state immediately
+        # Run first cycle IMMEDIATELY so user doesn't see empty dashboard
         kite = KiteClient(sess.kite_api_key, sess.kite_access_token)
         ticker = user_tickers.get(session_id)
         agg = get_or_create_aggregator(session_id, kite, ticker)
         state = agg.get_state()
+        if state.get("spot", 0) == 0:
+            # No data yet — run cycle right now instead of waiting for background loop
+            try:
+                state = await agg.run_cycle()
+            except Exception as e:
+                print(f"[WS] First cycle error: {e}")
+                state = agg.get_state()
         await ws.send_text(json.dumps(state, default=str))
 
         while True:
