@@ -8,9 +8,39 @@ function barColor(heat: number, isCE: boolean): string {
 }
 
 export default function StrikeHeatmap({ strikeMap, atm }: { strikeMap: StrikeMapEntry[]; atm: number }) {
-  if (!strikeMap.length) return (
-    <div className="h-full flex items-center justify-center text-tb-muted text-sm">Connecting to Kite API...</div>
-  )
+  if (!strikeMap.length) {
+    const now = new Date()
+    const day = now.getDay() // 0=Sun, 6=Sat
+    const hour = now.getHours()
+    const isWeekend = day === 0 || day === 6
+    const isAfterHours = !isWeekend && (hour < 9 || hour >= 16)
+    const isMarketClosed = isWeekend || isAfterHours
+
+    return (
+      <div className="h-full flex flex-col items-center justify-center text-center px-6">
+        {isMarketClosed ? (
+          <>
+            <div className="text-3xl mb-3">{isWeekend ? '📅' : '🌙'}</div>
+            <p className="text-tb-muted text-sm font-semibold mb-1">
+              {isWeekend ? 'Market Closed — Weekend' : 'Market Closed — After Hours'}
+            </p>
+            <p className="text-tb-muted/50 text-[10px] leading-relaxed">
+              {isWeekend
+                ? 'Markets reopen Monday 9:15 AM IST. Last trading day data will load from Kite API after the first data cycle.'
+                : 'Market hours: 9:15 AM — 3:30 PM IST. Pre-market data will appear closer to open.'}
+            </p>
+            <p className="text-tb-muted/30 text-[9px] mt-3">Detectors show last available data from Kite API</p>
+          </>
+        ) : (
+          <>
+            <div className="w-8 h-8 border-2 border-neon-cyan/30 border-t-neon-cyan rounded-full animate-spin mb-3" />
+            <p className="text-tb-muted text-sm">Loading option chain from Kite API...</p>
+            <p className="text-tb-muted/40 text-[9px] mt-1">First load takes ~10 seconds</p>
+          </>
+        )}
+      </div>
+    )
+  }
 
   const ceTotal = strikeMap.reduce((s, e) => s + e.ce_heat, 0)
   const peTotal = strikeMap.reduce((s, e) => s + e.pe_heat, 0)

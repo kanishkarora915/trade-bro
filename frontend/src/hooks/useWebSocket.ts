@@ -12,6 +12,8 @@ export interface TradeState {
   spot: number; atm: number; detectors: Record<string, DetectorResult>
   confluence: ConfluenceResult; brain: BrainSignal; strike_map: StrikeMapEntry[]
   chain_summary: ChainRow[]; error?: string; timestamp: string
+  ai_analysis?: AIAnalysis; signal_history?: SignalHistoryEntry[]
+  last_signal?: BrainSignal | null; fii_dii?: FiiDiiData; ticker_active?: boolean
 }
 export interface DetectorResult {
   id: string; name: string; score: number
@@ -30,7 +32,20 @@ export interface BrainSignal {
   secondary: { action: string; strike: string; cmp: string; target: string; stop_loss: string } | null
   exit_rules: { rule: string; detail: string }[]
   firing: { name: string; metric: string; status: string }[]
-  nifty_spot?: number; expiry?: string
+  nifty_spot?: number; expiry?: string; timestamp?: string
+}
+export interface AIAnalysis {
+  summary: string; analysis: string; bullets: string[]
+  sentiment: 'BULLISH' | 'BEARISH' | 'NEUTRAL' | 'MIXED'
+  confidence: 'HIGH' | 'MEDIUM' | 'LOW'
+  risk_notes: string[]; timestamp: string
+}
+export interface SignalHistoryEntry extends BrainSignal {
+  index: string; recorded_at: string; spot_at_signal: number
+}
+export interface FiiDiiData {
+  fii_net_cr: number; dii_net_cr: number; fii_buy?: number; fii_sell?: number
+  dii_buy?: number; dii_sell?: number; date?: string; source?: string
 }
 export interface AlertEntry { type: string; time: string; message: string }
 export interface StrikeMapEntry { strike: number; ce_heat: number; pe_heat: number; net: number; label: string; is_atm: boolean }

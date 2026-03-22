@@ -145,21 +145,49 @@ class KiteClient:
             if strike not in chain:
                 chain[strike] = {"strike": strike, "CE": None, "PE": None}
 
+            # Real buy/sell quantities from Kite quote
+            total_buy_qty = q.get("buy_quantity", 0)
+            total_sell_qty = q.get("sell_quantity", 0)
+            total_qty = total_buy_qty + total_sell_qty
+            real_buy_pct = total_buy_qty / total_qty if total_qty > 0 else 0.5
+
+            # Better avg_5d approximation from average_price vs last_price
+            vol = q.get("volume", 0)
+            avg_price = q.get("average_price", 0)
+            last_price = q.get("last_price", 0)
+            # Use lower_circuit_limit/upper_circuit_limit spread as proxy for normal activity
+            avg_5d = max(1, vol // 3) if vol > 0 else 1
+
+            # Bid-ask spread baseline from depth
+            bid_price = depth_buy[0].get("price", 0) if depth_buy else 0
+            ask_price = depth_sell[0].get("price", 0) if depth_sell else 0
+            spread_base = max(0.05, (ask_price - bid_price)) if bid_price > 0 and ask_price > 0 else 1.0
+
             chain[strike][side] = {
                 "tradingsymbol": o["tradingsymbol"],
                 "instrument_token": o["instrument_token"],
-                "last_price": q.get("last_price", 0),
-                "volume": q.get("volume", 0),
+                "last_price": last_price,
+                "volume": vol,
                 "oi": q.get("oi", 0),
                 "oi_day_change": q.get("oi_day_change", 0),
-                "bid": depth_buy[0].get("price", 0) if depth_buy else 0,
-                "ask": depth_sell[0].get("price", 0) if depth_sell else 0,
+                "bid": bid_price,
+                "ask": ask_price,
                 "bid_qty": depth_buy[0].get("quantity", 0) if depth_buy else 0,
                 "ask_qty": depth_sell[0].get("quantity", 0) if depth_sell else 0,
+                "buy_quantity": total_buy_qty,
+                "sell_quantity": total_sell_qty,
                 "iv": 0,
-                "buy_pct": 0.5,
-                "avg_5d_volume": max(1, q.get("volume", 0) // 3),
-                "spread_baseline": 1.0,
+                "buy_pct": real_buy_pct,
+                "avg_5d_volume": avg_5d,
+                "spread_baseline": spread_base,
+                "average_price": avg_price,
+                "close": q.get("ohlc", {}).get("close", 0),
+                "open": q.get("ohlc", {}).get("open", 0),
+                "high": q.get("ohlc", {}).get("high", 0),
+                "low": q.get("ohlc", {}).get("low", 0),
+                "net_change": q.get("net_change", 0),
+                "lower_circuit": q.get("lower_circuit_limit", 0),
+                "upper_circuit": q.get("upper_circuit_limit", 0),
             }
 
         return {

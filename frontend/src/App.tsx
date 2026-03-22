@@ -53,7 +53,21 @@ export default function App() {
         </button>
       </div>
 
-      {/* Error banner */}
+      {/* Market status / Error banner */}
+      {(() => {
+        const now = new Date()
+        const day = now.getDay()
+        const h = now.getHours()
+        const isWeekend = day === 0 || day === 6
+        const isAfterHours = !isWeekend && (h < 9 || h >= 16)
+        if (isWeekend || isAfterHours) return (
+          <div className="shrink-0 bg-blue-950/30 border-b border-blue-900/30 px-4 py-1.5 text-[11px] text-neon-blue font-mono flex items-center gap-2">
+            <span className="w-1.5 h-1.5 bg-neon-yellow rounded-full" />
+            {isWeekend ? 'Market Closed — Weekend. Showing last trading day data.' : 'Market Closed — After Hours. Data from last session.'}
+          </div>
+        )
+        return null
+      })()}
       {state.error && (
         <div className="shrink-0 bg-red-950/30 border-b border-red-900/30 px-4 py-1.5 text-[11px] text-neon-red font-mono">
           API Error: {state.error}
@@ -74,7 +88,16 @@ export default function App() {
 
         {/* Right — Brain Dashboard */}
         <div className="bg-tb-bg p-3 overflow-y-auto row-span-2">
-          <BrainDashboard confluence={state.confluence} brain={state.brain} spot={state.spot} />
+          <BrainDashboard
+            confluence={state.confluence}
+            brain={state.brain}
+            spot={state.spot}
+            aiAnalysis={state.ai_analysis}
+            signalHistory={state.signal_history}
+            lastSignal={state.last_signal}
+            fiiDii={state.fii_dii}
+            tickerActive={state.ticker_active}
+          />
         </div>
 
         {/* Bottom Left — Flow Tape */}

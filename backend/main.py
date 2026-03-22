@@ -1,4 +1,4 @@
-"""TRADE BRO — Options Boom Detector. Multi-user FastAPI backend with Kite OAuth."""
+"""TRADE BRO v3 — Options Boom Detector. Multi-user FastAPI backend with Kite OAuth + WebSocket Ticker."""
 import asyncio
 import json
 import time
@@ -8,6 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from session_manager import session_mgr, UserSession
 from kite_client import KiteClient
+from kite_ticker import KiteTicker
 from data_aggregator import get_or_create_aggregator, remove_aggregator
 from config import FRONTEND_URL, PORT, REFRESH_OPTION_CHAIN_SEC
 
@@ -26,13 +27,14 @@ class KiteCallback(BaseModel):
     request_token: str
 
 
-# --- WebSocket clients per session ---
+# --- Per-session state ---
 ws_clients: dict[str, set[WebSocket]] = {}
 bg_tasks: dict[str, asyncio.Task] = {}
+user_tickers: dict[str, KiteTicker] = {}  # session_id -> KiteTicker
 
 
 async def data_loop(session_id: str):
-    """Background loop per authenticated user — runs detectors every 30s."""
+    """Background loop per authenticated user — runs detectors every 30s with real tick data."""
     while True:
         try:
             sess = session_mgr.get_session(session_id)
@@ -40,7 +42,8 @@ async def data_loop(session_id: str):
                 break
 
             kite = KiteClient(sess.kite_api_key, sess.kite_access_token)
-            agg = get_or_create_aggregator(session_id, kite)
+            ticker = user_tickers.get(session_id)
+            agg = get_or_create_aggregator(session_id, kite, ticker)
             state = await agg.run_cycle()
 
             msg = json.dumps(state, default=str)
@@ -58,6 +61,29 @@ async def data_loop(session_id: str):
         await asyncio.sleep(REFRESH_OPTION_CHAIN_SEC)
 
 
+async def start_ticker(session_id: str, api_key: str, access_token: str):
+    """Start Kite WebSocket ticker for a user session."""
+    if session_id in user_tickers:
+        return  # Already running
+
+    ticker = KiteTicker(api_key, access_token)
+    ok = await ticker.connect()
+    if ok:
+        await ticker.start()
+        user_tickers[session_id] = ticker
+        print(f"[TRADE BRO] Ticker started for {session_id[:8]}")
+    else:
+        print(f"[TRADE BRO] Ticker failed to connect for {session_id[:8]}")
+
+
+async def stop_ticker(session_id: str):
+    """Stop and remove ticker for a session."""
+    ticker = user_tickers.pop(session_id, None)
+    if ticker:
+        await ticker.stop()
+        print(f"[TRADE BRO] Ticker stopped for {session_id[:8]}")
+
+
 def start_user_loop(session_id: str):
     if session_id not in bg_tasks or bg_tasks[session_id].done():
         bg_tasks[session_id] = asyncio.create_task(data_loop(session_id))
@@ -65,10 +91,13 @@ def start_user_loop(session_id: str):
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    print(f"[TRADE BRO] Backend started on port {PORT}")
+    print(f"[TRADE BRO] Backend v3 started on port {PORT}")
     yield
+    # Cleanup on shutdown
     for t in bg_tasks.values():
         t.cancel()
+    for sid in list(user_tickers.keys()):
+        await stop_ticker(sid)
 
 
 app = FastAPI(title="TRADE BRO", lifespan=lifespan)
@@ -86,8 +115,9 @@ app.add_middleware(
 async def health():
     return {
         "status": "ok",
-        "name": "TRADE BRO",
+        "name": "TRADE BRO v3",
         "active_users": session_mgr.get_active_count(),
+        "active_tickers": len(user_tickers),
         "uptime": time.time(),
     }
 
@@ -126,6 +156,9 @@ async def kite_callback(req: KiteCallback):
 
     session_mgr.set_access_token(sess.session_id, result["access_token"])
 
+    # Start Kite WebSocket ticker for real-time tick data
+    await start_ticker(sess.session_id, sess.kite_api_key, result["access_token"])
+
     # Start data loop for this user
     start_user_loop(sess.session_id)
 
@@ -150,6 +183,7 @@ async def logout(session_id: str):
     task = bg_tasks.pop(session_id, None)
     if task:
         task.cancel()
+    await stop_ticker(session_id)
     remove_aggregator(session_id)
     ws_clients.pop(session_id, None)
     session_mgr.logout(session_id)
@@ -163,7 +197,8 @@ async def get_state(session_id: str):
     if not sess or not sess.is_authenticated:
         raise HTTPException(403, "Not authenticated")
     kite = KiteClient(sess.kite_api_key, sess.kite_access_token)
-    agg = get_or_create_aggregator(session_id, kite)
+    ticker = user_tickers.get(session_id)
+    agg = get_or_create_aggregator(session_id, kite, ticker)
     return agg.get_state()
 
 
@@ -183,10 +218,15 @@ async def websocket_endpoint(ws: WebSocket, session_id: str):
     # Ensure data loop is running
     start_user_loop(session_id)
 
+    # Ensure ticker is running
+    if session_id not in user_tickers and sess.kite_access_token:
+        await start_ticker(session_id, sess.kite_api_key, sess.kite_access_token)
+
     try:
         # Send current state immediately
         kite = KiteClient(sess.kite_api_key, sess.kite_access_token)
-        agg = get_or_create_aggregator(session_id, kite)
+        ticker = user_tickers.get(session_id)
+        agg = get_or_create_aggregator(session_id, kite, ticker)
         state = agg.get_state()
         await ws.send_text(json.dumps(state, default=str))
 
