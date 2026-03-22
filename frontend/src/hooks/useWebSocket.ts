@@ -14,6 +14,7 @@ export interface TradeState {
   chain_summary: ChainRow[]; error?: string; timestamp: string
   ai_analysis?: AIAnalysis; signal_history?: SignalHistoryEntry[]
   last_signal?: BrainSignal | null; fii_dii?: FiiDiiData; ticker_active?: boolean
+  india_vix?: number; vix_enabled?: boolean
 }
 export interface DetectorResult {
   id: string; name: string; score: number
@@ -99,11 +100,15 @@ export function useWebSocket(sessionId: string | null) {
     if (wsRef.current?.readyState === 1) wsRef.current.send(`switch:${idx}`)
   }, [])
 
+  const toggleVix = useCallback(() => {
+    if (wsRef.current?.readyState === 1) wsRef.current.send('toggle_vix')
+  }, [])
+
   useEffect(() => {
     if (!sessionId) return
     connect()
     return () => { wsRef.current?.close(); clearInterval(timer.current) }
   }, [sessionId, connect])
 
-  return { state, connected, latency, switchIndex }
+  return { state, connected, latency, switchIndex, toggleVix }
 }

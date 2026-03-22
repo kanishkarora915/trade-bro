@@ -190,6 +190,20 @@ async def logout(session_id: str):
     return {"ok": True}
 
 
+# --- VIX Toggle ---
+@app.post("/api/vix/toggle/{session_id}")
+async def toggle_vix(session_id: str):
+    """Toggle India VIX integration on/off."""
+    sess = session_mgr.get_session(session_id)
+    if not sess or not sess.is_authenticated:
+        raise HTTPException(403, "Not authenticated")
+    kite = KiteClient(sess.kite_api_key, sess.kite_access_token)
+    ticker = user_tickers.get(session_id)
+    agg = get_or_create_aggregator(session_id, kite, ticker)
+    agg.vix_enabled = not agg.vix_enabled
+    return {"vix_enabled": agg.vix_enabled}
+
+
 # --- State REST fallback ---
 @app.get("/api/state/{session_id}")
 async def get_state(session_id: str):
@@ -235,12 +249,15 @@ async def websocket_endpoint(ws: WebSocket, session_id: str):
             if msg == "ping":
                 await ws.send_text("pong")
             elif msg.startswith("switch:"):
-                # Switch active index: "switch:BANKNIFTY"
                 idx = msg.split(":")[1].strip().upper()
                 if idx in ("NIFTY", "BANKNIFTY", "SENSEX"):
                     agg.active_index = idx
                     state = agg.get_state()
                     await ws.send_text(json.dumps(state, default=str))
+            elif msg == "toggle_vix":
+                agg.vix_enabled = not agg.vix_enabled
+                state = agg.get_state()
+                await ws.send_text(json.dumps(state, default=str))
     except WebSocketDisconnect:
         pass
     finally:

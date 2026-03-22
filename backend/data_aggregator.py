@@ -1,10 +1,6 @@
-"""Data Aggregator v3 — Multi-index with real tick data, FII/DII scraper, AI analysis.
+"""Data Aggregator v3.1 — Multi-index with real tick data, FII/DII, AI analysis, India VIX.
 
-Integrates:
-  - KiteTicker: real-time WebSocket ticks for order flow, sweeps, blocks
-  - NSE Scraper: real FII/DII institutional data
-  - AI Analyst: natural language trading suggestions
-  - Signal History: persistent buy/target/SL records
+Fixes: Non-blocking FII/DII fetch, only active index per cycle, India VIX support.
 """
 
 import asyncio
@@ -23,6 +19,8 @@ INDICES = {
     "BANKNIFTY": {"symbol": "NSE:NIFTY BANK", "name": "BANKNIFTY", "strike_step": 100, "range": 1000, "lot": 15},
     "SENSEX": {"symbol": "BSE:SENSEX", "name": "SENSEX", "strike_step": 100, "range": 1500, "lot": 10},
 }
+
+VIX_SYMBOL = "NSE:INDIA VIX"
 
 
 class IndexState:
@@ -58,7 +56,6 @@ class IndexState:
         }
 
     def _chain_summary(self) -> list:
-        """Summarized chain for frontend strike detail."""
         rows = []
         for strike in sorted(self.chain.keys()):
             s = self.chain[strike]
@@ -86,7 +83,7 @@ class IndexState:
 
 
 class UserAggregator:
-    """Multi-index aggregator per user session with real tick data integration."""
+    """Multi-index aggregator per user session."""
 
     def __init__(self, kite: KiteClient, ticker: KiteTicker | None = None):
         self.kite = kite
@@ -95,17 +92,18 @@ class UserAggregator:
         self.active_index = "NIFTY"
         self.alert_log: list[dict] = []
         self.flow_tape: list[dict] = []
-        self.signal_history: list[dict] = []     # past brain signals with timestamps
-        self.last_signal: dict | None = None      # last active signal (always visible)
-        self.ai_analysis: dict = {}               # latest AI analysis
-        self.fii_dii: dict = {}                   # latest FII/DII data
+        self.signal_history: list[dict] = []
+        self.last_signal: dict | None = None
+        self.ai_analysis: dict = {}
+        self.fii_dii: dict = {}
+        self.india_vix: float = 0.0
+        self.vix_enabled: bool = True  # VIX integration toggle
         self._prev_scores: dict[str, float] = {}
         self._cache: dict[str, tuple[float, dict]] = {}
         self._spot_cache: dict[str, tuple[float, float]] = {}
-        self._ticker_subscribed: bool = False
+        self._fii_dii_task: asyncio.Task | None = None
 
     async def _get_spot_cached(self, symbol: str, ttl: float = 5) -> float:
-        """Cache spot prices for `ttl` seconds."""
         now = time.time()
         if symbol in self._spot_cache:
             ts, price = self._spot_cache[symbol]
@@ -120,8 +118,18 @@ class UserAggregator:
         except Exception:
             return self._spot_cache.get(symbol, (0, 0))[1]
 
+    async def _fetch_vix(self) -> float:
+        """Fetch India VIX value."""
+        try:
+            data = await self.kite.get_ltp([VIX_SYMBOL])
+            vix = list(data.values())[0].get("last_price", 0) if data else 0
+            if vix > 0:
+                self.india_vix = vix
+            return self.india_vix
+        except Exception:
+            return self.india_vix
+
     async def _build_chain_cached(self, index_id: str, spot: float, ttl: float = 25) -> dict:
-        """Cache option chain for `ttl` seconds."""
         now = time.time()
         key = f"chain_{index_id}"
         if key in self._cache:
@@ -134,8 +142,7 @@ class UserAggregator:
         return data
 
     async def _subscribe_ticker(self, chain: dict, index_id: str):
-        """Register chain tokens with ticker and subscribe."""
-        if not self.ticker:
+        if not self.ticker or not self.ticker._running:
             return
         cfg = INDICES[index_id]
         new_tokens = self.ticker.register_tokens(chain, index_id, cfg["lot"])
@@ -146,7 +153,6 @@ class UserAggregator:
                 print(f"[AGG] Ticker subscribe error: {e}")
 
     def _enrich_chain_with_ticks(self, chain: dict, index_id: str):
-        """Overlay real tick data (buy_pct, volume, oi) onto the chain."""
         if not self.ticker:
             return
         flow = self.ticker.get_flow_for_chain(chain, index_id)
@@ -156,35 +162,66 @@ class UserAggregator:
                     if side_key in flow[strike] and sides.get(side_key):
                         tick_flow = flow[strike][side_key]
                         sides[side_key]["buy_pct"] = tick_flow.get("buy_pct", 0.5)
-                        # Update volume/oi if ticker has fresher data
                         if tick_flow.get("volume", 0) > 0:
                             sides[side_key]["volume"] = tick_flow["volume"]
                         if tick_flow.get("oi", 0) > 0:
                             sides[side_key]["oi"] = tick_flow["oi"]
 
-    async def run_cycle(self, index_id: str | None = None) -> dict:
-        """Run detectors for specified index (or all) with real data integration."""
-        targets = [index_id] if index_id else list(INDICES.keys())
+    def _start_fii_dii_background(self):
+        """Start FII/DII fetch as background task (non-blocking)."""
+        if self._fii_dii_task and not self._fii_dii_task.done():
+            return  # already running
 
-        # Fetch FII/DII data (async, cached 5min)
-        try:
-            self.fii_dii = await fetch_fii_dii()
-        except Exception:
-            pass  # keep previous data
-
-        # Fetch all spots in parallel
-        spots = {}
-        for idx in targets:
-            cfg = INDICES[idx]
+        async def _fetch():
             try:
-                spots[idx] = await self._get_spot_cached(cfg["symbol"])
-            except Exception:
-                spots[idx] = 0
+                data = await fetch_fii_dii()
+                if data:
+                    self.fii_dii = data
+            except Exception as e:
+                print(f"[AGG] FII/DII background fetch error: {e}")
 
-        # Build chains + run detectors for each index
+        self._fii_dii_task = asyncio.create_task(_fetch())
+
+    async def run_cycle(self, index_id: str | None = None) -> dict:
+        """Run detectors for active index only (not all 3) for speed."""
+        # Only run active index to avoid 3x API calls
+        targets = [index_id] if index_id else [self.active_index]
+
+        # Non-blocking FII/DII fetch (runs in background, doesn't delay cycle)
+        self._start_fii_dii_background()
+
+        # Fetch VIX alongside spot prices
+        try:
+            await self._fetch_vix()
+        except Exception:
+            pass
+
+        # Fetch spot prices — also fetch non-active indices for display
+        spots = {}
+        all_symbols = [(idx, INDICES[idx]["symbol"]) for idx in INDICES]
+        try:
+            symbols_to_fetch = [s for _, s in all_symbols]
+            data = await self.kite.get_ltp(symbols_to_fetch)
+            for idx, sym in all_symbols:
+                price = data.get(sym, {}).get("last_price", 0)
+                if price > 0:
+                    spots[idx] = price
+                    self.indices[idx].spot = price
+                    self._spot_cache[sym] = (time.time(), price)
+        except Exception as e:
+            print(f"[AGG] Spot fetch error: {e}")
+            # Fallback: try individual
+            for idx in targets:
+                cfg = INDICES[idx]
+                try:
+                    spots[idx] = await self._get_spot_cached(cfg["symbol"])
+                except Exception:
+                    spots[idx] = 0
+
+        # Build chains + run detectors for target indices
         for idx in targets:
             state = self.indices[idx]
-            spot = spots.get(idx, 0)
+            spot = spots.get(idx, state.spot)
             if spot <= 0:
                 state.error = f"Could not fetch {idx} price"
                 continue
@@ -195,10 +232,10 @@ class UserAggregator:
                 state.atm = chain_data.get("atm", 0)
                 state.chain = chain_data.get("chain", {})
 
-                # Subscribe ticker to chain tokens (first time)
+                # Subscribe ticker (non-blocking, won't fail if ticker is off)
                 await self._subscribe_ticker(state.chain, idx)
 
-                # Enrich chain with real tick data (buy_pct, volume, oi)
+                # Enrich chain with real tick data
                 self._enrich_chain_with_ticks(state.chain, idx)
 
                 # Get real trade data from ticker
@@ -223,9 +260,12 @@ class UserAggregator:
                     "expiry_date": chain_data.get("expiry", ""),
                     "is_expiry_day": False, "time_to_expiry_mins": 1440,
                     "trend": 0, "timestamp": datetime.now().isoformat(),
+                    # VIX data
+                    "india_vix": self.india_vix,
+                    "vix_enabled": self.vix_enabled,
                 }
 
-                # Check if today is expiry day (Thursday for Nifty/BankNifty weekly)
+                # Check if today is expiry day
                 today = datetime.now()
                 expiry_str = chain_data.get("expiry", "")
                 if expiry_str:
@@ -233,7 +273,6 @@ class UserAggregator:
                         expiry_date = datetime.strptime(expiry_str, "%Y-%m-%d").date()
                         if expiry_date == today.date():
                             raw["is_expiry_day"] = True
-                            # Calculate minutes to expiry (3:30 PM = 15:30)
                             close_time = today.replace(hour=15, minute=30, second=0)
                             diff = (close_time - today).total_seconds() / 60
                             raw["time_to_expiry_mins"] = max(0, diff)
@@ -241,18 +280,16 @@ class UserAggregator:
                         pass
 
                 # Cross-index correlation data
-                if idx == "BANKNIFTY" and "NIFTY" in spots and spots["NIFTY"] > 0:
+                if idx == "BANKNIFTY" and spots.get("NIFTY", 0) > 0:
                     nifty_spot = spots["NIFTY"]
-                    nifty_close = self.indices["NIFTY"].chain.get(self.indices["NIFTY"].atm, {}).get("CE", {}).get("close", nifty_spot) or nifty_spot
+                    nifty_state = self.indices.get("NIFTY")
+                    nifty_close = nifty_spot  # fallback
+                    if nifty_state and nifty_state.chain:
+                        atm_data = nifty_state.chain.get(nifty_state.atm, {})
+                        nifty_close = atm_data.get("CE", {}).get("close", nifty_spot) or nifty_spot
                     nifty_chg = ((nifty_spot - nifty_close) / nifty_close * 100) if nifty_close > 0 else 0
                     raw["banknifty"]["nifty_change_pct"] = nifty_chg
-                    raw["banknifty"]["expected_bn_change_pct"] = nifty_chg * 1.5  # BN typically moves 1.5x Nifty
-
-                # Calculate spot trend
-                if self._spot_cache.get(INDICES[idx]["symbol"]):
-                    _, cached_spot = self._spot_cache[INDICES[idx]["symbol"]]
-                    if cached_spot > 0:
-                        raw["trend"] = ((spot - cached_spot) / cached_spot * 100) if cached_spot != spot else 0
+                    raw["banknifty"]["expected_bn_change_pct"] = nifty_chg * 1.5
 
                 # Max pain calculation
                 strikes_list = sorted(state.chain.keys())
@@ -288,6 +325,13 @@ class UserAggregator:
                         state.detectors[det_id] = {"id": det_id, "name": det_id, "score": 0, "status": "NORMAL", "metric": "Error", "alerts": []}
 
                 state.confluence = calculate(state.detectors, is_expiry_day=raw.get("is_expiry_day", False))
+
+                # VIX boost: when VIX > 20 and enabled, boost confluence score slightly
+                if self.vix_enabled and self.india_vix > 20:
+                    vix_mult = min(1.3, 1.0 + (self.india_vix - 20) / 50)
+                    state.confluence["score"] = min(100, state.confluence["score"] * vix_mult)
+                    state.confluence["vix_boost"] = round(vix_mult, 2)
+
                 state.brain = generate(state.confluence, state.detectors, raw)
                 state.strike_map = state.detectors.get("d06_confluence_map", {}).get("strike_map", [])
 
@@ -300,17 +344,15 @@ class UserAggregator:
                         "spot_at_signal": spot,
                     }
                     self.last_signal = signal_entry
-
-                    # Only add to history if it's a new signal (different strike or 5+ min gap)
                     should_add = True
                     if self.signal_history:
                         last = self.signal_history[-1]
                         if (last.get("primary", {}).get("strike") == state.brain["primary"].get("strike")
                                 and last.get("direction") == state.brain.get("direction")):
-                            should_add = False  # Same signal, don't duplicate
+                            should_add = False
                     if should_add:
                         self.signal_history.append(signal_entry)
-                        self.signal_history = self.signal_history[-50:]  # keep last 50
+                        self.signal_history = self.signal_history[-50:]
 
                 # Alerts
                 score = state.confluence.get("score", 0)
@@ -327,7 +369,7 @@ class UserAggregator:
                 state.error = ""
                 state.last_fetch = time.time()
 
-                # Build flow tape entries from chain volume + real tick data
+                # Flow tape entries
                 for strike in strikes_list[:10]:
                     for side in ("CE", "PE"):
                         info = state.chain[strike].get(side)
@@ -344,12 +386,13 @@ class UserAggregator:
 
             except Exception as e:
                 state.error = str(e)[:200]
+                print(f"[AGG] Error for {idx}: {e}")
 
-        # Clear consumed ticker data to avoid double-counting
+        # Clear consumed ticker data
         if self.ticker:
             self.ticker.clear_consumed()
 
-        # Generate AI analysis for active index
+        # AI analysis for active index
         active_state = self.indices[self.active_index]
         if active_state.detectors:
             try:
@@ -379,7 +422,7 @@ class UserAggregator:
             "alert_log": self.alert_log[-30:],
             "flow_tape": self.flow_tape[-50:],
             "timestamp": datetime.now().isoformat(),
-            # Active index shortcut fields (backward compat)
+            # Active index shortcut fields
             "spot": active_state.spot,
             "atm": active_state.atm,
             "detectors": active_state.detectors,
@@ -388,12 +431,15 @@ class UserAggregator:
             "strike_map": active_state.strike_map,
             "chain_summary": active_state._chain_summary(),
             "error": active_state.error,
-            # New v3 fields
+            # v3 fields
             "ai_analysis": self.ai_analysis,
-            "signal_history": self.signal_history[-10:],  # last 10 signals
-            "last_signal": self.last_signal,               # always-visible last signal
+            "signal_history": self.signal_history[-10:],
+            "last_signal": self.last_signal,
             "fii_dii": self.fii_dii,
             "ticker_active": self.ticker is not None and self.ticker._running if self.ticker else False,
+            # VIX
+            "india_vix": self.india_vix,
+            "vix_enabled": self.vix_enabled,
         }
 
 
@@ -403,9 +449,7 @@ def get_or_create_aggregator(session_id: str, kite: KiteClient, ticker: KiteTick
     if session_id not in user_aggregators:
         user_aggregators[session_id] = UserAggregator(kite, ticker)
     else:
-        # Update kite client (token may have changed)
         user_aggregators[session_id].kite = kite
-        # Update ticker if provided and not already set
         if ticker and not user_aggregators[session_id].ticker:
             user_aggregators[session_id].ticker = ticker
     return user_aggregators[session_id]

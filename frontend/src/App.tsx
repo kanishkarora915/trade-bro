@@ -17,7 +17,7 @@ import StrikeDetail from './components/StrikeDetail'
 export default function App() {
   const { step, session, error, loading, verifyLicense, setKiteCredentials, logout } = useSession()
   const sessionId = step === 'authenticated' && session ? session.session_id : null
-  const { state, connected, latency, switchIndex } = useWebSocket(sessionId)
+  const { state, connected, latency, switchIndex, toggleVix } = useWebSocket(sessionId)
   useAlerts(state.confluence)
 
   const [selectedDetector, setSelectedDetector] = useState<DetectorResult | null>(null)
@@ -42,7 +42,7 @@ export default function App() {
   return (
     <div className={`h-screen flex flex-col bg-tb-bg overflow-hidden ${flash}`}>
       {/* Top bar */}
-      <TopBar spot={state.spot} atm={state.atm} connected={connected} latency={latency} userName={session?.user_name || ''} onLogout={logout} />
+      <TopBar spot={state.spot} atm={state.atm} connected={connected} latency={latency} userName={session?.user_name || ''} onLogout={logout} indiaVix={state.india_vix} vixEnabled={state.vix_enabled} onToggleVix={toggleVix} />
 
       {/* Index tabs + Chain button */}
       <div className="shrink-0 flex items-center justify-between px-4 py-1.5 bg-tb-card/30 border-b border-tb-border">
