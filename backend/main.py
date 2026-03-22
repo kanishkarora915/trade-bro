@@ -194,6 +194,13 @@ async def websocket_endpoint(ws: WebSocket, session_id: str):
             msg = await ws.receive_text()
             if msg == "ping":
                 await ws.send_text("pong")
+            elif msg.startswith("switch:"):
+                # Switch active index: "switch:BANKNIFTY"
+                idx = msg.split(":")[1].strip().upper()
+                if idx in ("NIFTY", "BANKNIFTY", "SENSEX"):
+                    agg.active_index = idx
+                    state = agg.get_state()
+                    await ws.send_text(json.dumps(state, default=str))
     except WebSocketDisconnect:
         pass
     finally:

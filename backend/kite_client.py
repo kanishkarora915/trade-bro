@@ -69,13 +69,16 @@ class KiteClient:
         self._instruments_cache = rows
         return rows
 
-    async def get_nifty_options(self, expiry: str | None = None) -> list[dict]:
-        instruments = await self.get_instruments("NFO")
+    async def get_options(self, name: str = "NIFTY", expiry: str | None = None) -> list[dict]:
+        """Get options for any index: NIFTY, BANKNIFTY, SENSEX."""
+        exchange = "BFO" if name == "SENSEX" else "NFO"
+        segment = f"{exchange}-OPT"
+        instruments = await self.get_instruments(exchange)
         opts = [
             i for i in instruments
-            if i.get("name") == "NIFTY"
+            if i.get("name") == name
             and i.get("instrument_type") in ("CE", "PE")
-            and i.get("segment") == "NFO-OPT"
+            and i.get("segment") == segment
         ]
         if expiry:
             opts = [i for i in opts if i.get("expiry") == expiry]
@@ -113,14 +116,16 @@ class KiteClient:
             for c in candles
         ]
 
-    async def build_option_chain(self, spot_price: float, expiry: str | None = None) -> dict:
-        opts = await self.get_nifty_options(expiry)
-        atm = round(spot_price / NIFTY_STRIKE_STEP) * NIFTY_STRIKE_STEP
-        low = atm - OPTION_CHAIN_RANGE
-        high = atm + OPTION_CHAIN_RANGE
+    async def build_option_chain(self, spot_price: float, expiry: str | None = None,
+                                  name: str = "NIFTY", strike_step: int = 50, chain_range: int = 500) -> dict:
+        opts = await self.get_options(name, expiry)
+        atm = round(spot_price / strike_step) * strike_step
+        low = atm - chain_range
+        high = atm + chain_range
 
+        exchange = "BFO" if name == "SENSEX" else "NFO"
         filtered = [o for o in opts if low <= float(o.get("strike", 0)) <= high]
-        trading_symbols = [f"NFO:{o['tradingsymbol']}" for o in filtered]
+        trading_symbols = [f"{exchange}:{o['tradingsymbol']}" for o in filtered]
 
         quotes = {}
         for i in range(0, len(trading_symbols), 500):
@@ -132,7 +137,7 @@ class KiteClient:
         for o in filtered:
             strike = float(o["strike"])
             side = o["instrument_type"]
-            key = f"NFO:{o['tradingsymbol']}"
+            key = f"{exchange}:{o['tradingsymbol']}"
             q = quotes.get(key, {})
             depth_buy = q.get("depth", {}).get("buy", [{}])
             depth_sell = q.get("depth", {}).get("sell", [{}])

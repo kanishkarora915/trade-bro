@@ -8,11 +8,12 @@ const CFG: Record<string, { border: string; bg: string; text: string; dot: strin
 }
 const BAR: Record<string, string> = { NORMAL: 'bg-tb-muted/40', WATCH: 'bg-neon-blue', ALERT: 'bg-neon-orange', CRITICAL: 'bg-neon-red' }
 
-export default function DetectorCard({ d }: { d: DetectorResult }) {
+export default function DetectorCard({ d, onClick }: { d: DetectorResult; onClick?: () => void }) {
   const s = d.status || 'NORMAL'
   const c = CFG[s]
   return (
-    <div className={`${c.bg} border ${c.border} rounded-xl p-3 transition-all duration-300 hover:brightness-110`}>
+    <div onClick={onClick}
+      className={`${c.bg} border ${c.border} rounded-xl p-3 transition-all duration-300 hover:brightness-125 ${onClick ? 'cursor-pointer' : ''}`}>
       <div className="flex items-center justify-between mb-1.5">
         <span className="text-[10px] font-bold uppercase tracking-wider text-tb-text/80 truncate">{d.name}</span>
         <span className={`w-2 h-2 rounded-full ${c.dot} ${s === 'CRITICAL' ? 'animate-pulse-dot' : ''}`} />

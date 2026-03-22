@@ -8,7 +8,9 @@ const ORDER = [
   'd15_correlation','d16_vacuum','d17_fii_dii',
 ]
 
-export default function IndicatorsPanel({ detectors }: { detectors: Record<string, DetectorResult> }) {
+export default function IndicatorsPanel({ detectors, onDetectorClick }: {
+  detectors: Record<string, DetectorResult>; onDetectorClick: (d: DetectorResult) => void
+}) {
   const active = ORDER.filter(id => detectors[id]?.status !== 'NORMAL').length
   return (
     <div className="h-full flex flex-col">
@@ -17,7 +19,10 @@ export default function IndicatorsPanel({ detectors }: { detectors: Record<strin
         <span className="text-[10px] font-mono text-tb-muted">{active} active</span>
       </div>
       <div className="flex-1 overflow-y-auto pr-1 space-y-2">
-        {ORDER.map(id => { const d = detectors[id]; return d ? <DetectorCard key={id} d={d} /> : null })}
+        {ORDER.map(id => {
+          const d = detectors[id]
+          return d ? <DetectorCard key={id} d={d} onClick={() => onDetectorClick(d)} /> : null
+        })}
       </div>
     </div>
   )
