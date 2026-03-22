@@ -17,7 +17,7 @@ from brain_signal import generate
 INDICES = {
     "NIFTY": {"symbol": "NSE:NIFTY 50", "name": "NIFTY", "strike_step": 50, "range": 500, "lot": 25},
     "BANKNIFTY": {"symbol": "NSE:NIFTY BANK", "name": "BANKNIFTY", "strike_step": 100, "range": 1000, "lot": 15},
-    "SENSEX": {"symbol": "BSE:SENSEX", "name": "SENSEX", "strike_step": 100, "range": 1500, "lot": 10},
+    "SENSEX": {"symbol": "BSE:SENSEX", "name": "SENSEX", "strike_step": 100, "range": 1000, "lot": 10},
 }
 
 VIX_SYMBOL = "NSE:INDIA VIX"

@@ -1,5 +1,6 @@
-"""Zerodha Kite Connect API wrapper — per-user sessions."""
+"""Zerodha Kite Connect API wrapper — per-user sessions with global caching."""
 import hashlib
+import time
 import httpx
 from datetime import datetime, timedelta
 from config import NIFTY_STRIKE_STEP, OPTION_CHAIN_RANGE
@@ -7,9 +8,13 @@ from config import NIFTY_STRIKE_STEP, OPTION_CHAIN_RANGE
 BASE = "https://api.kite.trade"
 LOGIN_URL = "https://kite.zerodha.com/connect/login?v=3&api_key="
 
+# Global instruments cache — shared across all users, refreshed every 4 hours
+_instruments_cache: dict[str, tuple[float, list[dict]]] = {}  # exchange -> (timestamp, data)
+_INSTRUMENTS_TTL = 4 * 3600  # 4 hours
+
 
 class KiteClient:
-    """Per-user Kite API client."""
+    """Per-user Kite API client with aggressive caching."""
 
     def __init__(self, api_key: str, access_token: str):
         self.api_key = api_key
@@ -18,7 +23,6 @@ class KiteClient:
             "X-Kite-Version": "3",
             "Authorization": f"token {api_key}:{access_token}",
         }
-        self._instruments_cache: list[dict] | None = None
 
     @staticmethod
     def get_login_url(api_key: str) -> str:
@@ -26,7 +30,6 @@ class KiteClient:
 
     @staticmethod
     async def generate_session(api_key: str, api_secret: str, request_token: str) -> dict:
-        """Exchange request_token for access_token."""
         checksum = hashlib.sha256(
             f"{api_key}{request_token}{api_secret}".encode()
         ).hexdigest()
@@ -50,14 +53,20 @@ class KiteClient:
             }
 
     async def _get(self, path: str, params: list | None = None) -> httpx.Response:
-        async with httpx.AsyncClient(timeout=15) as client:
+        async with httpx.AsyncClient(timeout=12) as client:
             r = await client.get(f"{BASE}{path}", params=params, headers=self.headers)
             r.raise_for_status()
             return r
 
     async def get_instruments(self, exchange: str = "NFO") -> list[dict]:
-        if self._instruments_cache:
-            return self._instruments_cache
+        """Get instruments with global 4-hour cache (shared across users)."""
+        now = time.time()
+        if exchange in _instruments_cache:
+            ts, data = _instruments_cache[exchange]
+            if now - ts < _INSTRUMENTS_TTL:
+                return data
+
+        print(f"[KITE] Fetching instruments for {exchange}...")
         r = await self._get(f"/instruments/{exchange}")
         lines = r.text.strip().split("\n")
         header = lines[0].split(",")
@@ -66,11 +75,11 @@ class KiteClient:
             vals = line.split(",")
             if len(vals) == len(header):
                 rows.append(dict(zip(header, vals)))
-        self._instruments_cache = rows
+        _instruments_cache[exchange] = (now, rows)
+        print(f"[KITE] Cached {len(rows)} instruments for {exchange}")
         return rows
 
     async def get_options(self, name: str = "NIFTY", expiry: str | None = None) -> list[dict]:
-        """Get options for any index: NIFTY, BANKNIFTY, SENSEX."""
         exchange = "BFO" if name == "SENSEX" else "NFO"
         segment = f"{exchange}-OPT"
         instruments = await self.get_instruments(exchange)
@@ -120,18 +129,20 @@ class KiteClient:
                                   name: str = "NIFTY", strike_step: int = 50, chain_range: int = 500) -> dict:
         opts = await self.get_options(name, expiry)
         atm = round(spot_price / strike_step) * strike_step
-        low = atm - chain_range
-        high = atm + chain_range
+
+        # Tighter range for faster fetching — ±10 strikes is enough for detectors
+        tight_range = min(chain_range, strike_step * 10)
+        low = atm - tight_range
+        high = atm + tight_range
 
         exchange = "BFO" if name == "SENSEX" else "NFO"
         filtered = [o for o in opts if low <= float(o.get("strike", 0)) <= high]
         trading_symbols = [f"{exchange}:{o['tradingsymbol']}" for o in filtered]
 
+        # Single batch — with tight range this is always < 500
         quotes = {}
-        for i in range(0, len(trading_symbols), 500):
-            batch = trading_symbols[i:i + 500]
-            q = await self.get_quote(batch)
-            quotes.update(q)
+        if trading_symbols:
+            quotes = await self.get_quote(trading_symbols[:500])
 
         chain: dict[float, dict] = {}
         for o in filtered:
@@ -145,20 +156,16 @@ class KiteClient:
             if strike not in chain:
                 chain[strike] = {"strike": strike, "CE": None, "PE": None}
 
-            # Real buy/sell quantities from Kite quote
             total_buy_qty = q.get("buy_quantity", 0)
             total_sell_qty = q.get("sell_quantity", 0)
             total_qty = total_buy_qty + total_sell_qty
             real_buy_pct = total_buy_qty / total_qty if total_qty > 0 else 0.5
 
-            # Better avg_5d approximation from average_price vs last_price
             vol = q.get("volume", 0)
             avg_price = q.get("average_price", 0)
             last_price = q.get("last_price", 0)
-            # Use lower_circuit_limit/upper_circuit_limit spread as proxy for normal activity
             avg_5d = max(1, vol // 3) if vol > 0 else 1
 
-            # Bid-ask spread baseline from depth
             bid_price = depth_buy[0].get("price", 0) if depth_buy else 0
             ask_price = depth_sell[0].get("price", 0) if depth_sell else 0
             spread_base = max(0.05, (ask_price - bid_price)) if bid_price > 0 and ask_price > 0 else 1.0

@@ -5,6 +5,7 @@ import time
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 from pydantic import BaseModel
 from session_manager import session_mgr, UserSession
 from kite_client import KiteClient
@@ -102,6 +103,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="TRADE BRO", lifespan=lifespan)
 
+app.add_middleware(GZipMiddleware, minimum_size=500)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
