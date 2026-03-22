@@ -23,12 +23,14 @@ export default function App() {
   const [selectedDetector, setSelectedDetector] = useState<DetectorResult | null>(null)
   const [showChain, setShowChain] = useState(false)
 
-  if (loading && step !== 'kite_credentials') {
+  // Show spinner during Zerodha callback or any non-credentials loading
+  if (step === 'kite_redirect' || (loading && step !== 'kite_credentials' && step !== 'license')) {
     return (
       <div className="min-h-screen bg-tb-bg flex items-center justify-center">
         <div className="text-center animate-slide-up">
           <div className="w-10 h-10 border-3 border-neon-cyan/30 border-t-neon-cyan rounded-full animate-spin mx-auto mb-4" />
           <p className="text-tb-muted text-sm">Authenticating with Zerodha...</p>
+          <p className="text-tb-muted/40 text-[10px] mt-2">Exchanging token with Kite API</p>
         </div>
       </div>
     )
@@ -36,6 +38,19 @@ export default function App() {
 
   if (step === 'license') return <LicensePage onVerify={verifyLicense} error={error} loading={loading} />
   if (step === 'kite_credentials') return <KiteLoginPage userName={session?.user_name || ''} error={error} loading={loading} onSetCredentials={setKiteCredentials} onLogout={logout} />
+
+  // Authenticated but waiting for first data from WebSocket
+  if (step === 'authenticated' && !connected && state.spot === 0) {
+    return (
+      <div className="min-h-screen bg-tb-bg flex items-center justify-center">
+        <div className="text-center animate-slide-up">
+          <div className="w-10 h-10 border-3 border-neon-cyan/30 border-t-neon-cyan rounded-full animate-spin mx-auto mb-4" />
+          <p className="text-neon-cyan text-sm font-semibold">Authenticated! Connecting to TRADE BRO...</p>
+          <p className="text-tb-muted/50 text-[10px] mt-2">Loading option chain from Kite API (first load ~10s)</p>
+        </div>
+      </div>
+    )
+  }
 
   const flash = state.confluence.score >= 86 ? 'flash-red' : state.confluence.score >= 76 ? 'flash-green' : ''
 

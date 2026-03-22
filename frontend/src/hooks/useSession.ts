@@ -40,21 +40,22 @@ export function useSession() {
     const token = params.get('request_token')
     const status = params.get('status')
     if (token && status === 'success') {
-      // Clean URL
+      // Clean URL immediately
       window.history.replaceState({}, '', window.location.pathname)
-      // Auto-authenticate
+      // Show loading state — switch to 'kite_redirect' so spinner shows
+      setStep('kite_redirect')
+      setLoading(true)
       const sess = loadSession()
       if (sess) {
-        setLoading(true)
         fetch(`${API}/api/kite/callback`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ session_id: sess.session_id, request_token: token }),
         })
-          .then(r => r.json())
+          .then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json() })
           .then(data => {
             if (data.authenticated) {
-              const updated = { ...sess, is_authenticated: true }
+              const updated = { ...sess, is_authenticated: true, user_name: data.user_name || sess.user_name }
               setSession(updated)
               setStep('authenticated')
             } else {
@@ -62,8 +63,12 @@ export function useSession() {
               setStep('kite_credentials')
             }
           })
-          .catch(() => { setError('Server error. Try again.'); setStep('kite_credentials') })
+          .catch((e) => { setError(`Server error: ${e.message}. Try again.`); setStep('kite_credentials') })
           .finally(() => setLoading(false))
+      } else {
+        // No session found — start over
+        setStep('license')
+        setLoading(false)
       }
     }
   }, [])
