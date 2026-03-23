@@ -13,6 +13,7 @@ import AlertLog from './components/AlertLog'
 import FlowTape from './components/FlowTape'
 import DetectorDetail from './components/DetectorDetail'
 import StrikeDetail from './components/StrikeDetail'
+import FlowDashboard from './components/FlowDashboard'
 
 export default function App() {
   const { step, session, error, loading, verifyLicense, setKiteCredentials, logout } = useSession()
@@ -22,6 +23,7 @@ export default function App() {
 
   const [selectedDetector, setSelectedDetector] = useState<DetectorResult | null>(null)
   const [showChain, setShowChain] = useState(false)
+  const [activeTab, setActiveTab] = useState<'main' | 'flow'>('main')
 
   // Show spinner during Zerodha callback or any non-credentials loading
   if (step === 'kite_redirect' || (loading && step !== 'kite_credentials' && step !== 'license')) {
@@ -56,6 +58,23 @@ export default function App() {
     )
   }
 
+  // Flow Dashboard — 2nd screen
+  if (activeTab === 'flow') {
+    return (
+      <FlowDashboard
+        tape={state.flow_tape || []}
+        brain={state.brain}
+        lastSignal={state.last_signal}
+        signalHistory={state.signal_history}
+        chain={state.chain_summary || []}
+        confluence={state.confluence}
+        spot={state.spot}
+        atm={state.atm}
+        onBack={() => setActiveTab('main')}
+      />
+    )
+  }
+
   const flash = state.confluence.score >= 86 ? 'flash-red' : state.confluence.score >= 76 ? 'flash-green' : ''
 
   return (
@@ -66,10 +85,16 @@ export default function App() {
       {/* Index tabs + Chain button */}
       <div className="shrink-0 flex items-center justify-between px-4 py-1.5 bg-tb-card/30 border-b border-tb-border">
         <IndexTabs active={state.active_index || 'NIFTY'} spots={state.spots || {}} onSwitch={switchIndex} />
-        <button onClick={() => setShowChain(true)}
-          className="text-[10px] font-bold text-neon-cyan border border-neon-cyan/30 px-3 py-1 rounded-lg hover:bg-neon-cyan/10 transition-all">
-          Full Chain View
-        </button>
+        <div className="flex items-center gap-2">
+          <button onClick={() => setActiveTab('flow')}
+            className="text-[10px] font-bold text-neon-purple border border-neon-purple/30 px-3 py-1 rounded-lg hover:bg-neon-purple/10 transition-all">
+            Flow Dashboard →
+          </button>
+          <button onClick={() => setShowChain(true)}
+            className="text-[10px] font-bold text-neon-cyan border border-neon-cyan/30 px-3 py-1 rounded-lg hover:bg-neon-cyan/10 transition-all">
+            Full Chain View
+          </button>
+        </div>
       </div>
 
       {/* Market status / Error banner */}
