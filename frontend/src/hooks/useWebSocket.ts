@@ -57,7 +57,7 @@ export interface ChainRow {
   pe_bid: number; pe_ask: number; pe_oi_chg: number; is_atm: boolean
 }
 export interface FlowEntry {
-  time: string; index: string; strike: string; price: number; volume: number; oi: number; type: 'BUY' | 'SELL' | 'NEUTRAL'
+  time: string; index: string; strike: string; side?: string; price: number; volume: number; oi: number; oi_chg?: number; buy_pct?: number; iv?: number; type: 'BUY' | 'SELL' | 'NEUTRAL'
 }
 
 const EMPTY_CONF: ConfluenceResult = { score: 0, status: 'NEUTRAL', color: 'grey', direction: 'NEUTRAL', time_multiplier: 1, is_expiry_day: false, breakdown: {}, firing: [], timestamp: '' }

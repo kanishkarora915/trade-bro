@@ -1,11 +1,49 @@
 import { useState } from 'react'
-import type { TradeState, DetectorResult } from '../hooks/useWebSocket'
+import type { TradeState, DetectorResult, FlowEntry } from '../hooks/useWebSocket'
 
 interface Props { state: TradeState; onBack: () => void }
 
-const TYPE_CLR: Record<string, string> = { BUY: 'text-neon-green', SELL: 'text-neon-red', NEUTRAL: 'text-gray-400' }
-const TYPE_BG: Record<string, string> = { BUY: 'bg-emerald-950/25 border-emerald-700/30', SELL: 'bg-red-950/25 border-red-700/30', NEUTRAL: 'bg-tb-surface/30 border-tb-border' }
 const STR_CLR: Record<string, string> = { EXTREME: 'bg-red-500/25 text-red-400 border border-red-500/40', AGGRESSIVE: 'bg-neon-red/20 text-neon-red', STRONG: 'bg-neon-green/20 text-neon-green', MILD: 'bg-neon-yellow/20 text-neon-yellow' }
+
+/** Extract CE/PE side from entry */
+function getSide(f: FlowEntry): string {
+  if (f.side) return f.side
+  if (f.strike.includes('CE')) return 'CE'
+  if (f.strike.includes('PE')) return 'PE'
+  return ''
+}
+
+/** Flow Quadrant component */
+function FlowQuadrant({ title, subtitle, color, entries }: { title: string; subtitle: string; color: 'green' | 'red'; entries: FlowEntry[] }) {
+  const borderClr = color === 'green' ? 'border-green-800/30' : 'border-red-800/30'
+  const bgClr = color === 'green' ? 'bg-emerald-950/10' : 'bg-red-950/10'
+  const titleClr = color === 'green' ? 'text-green-400' : 'text-red-400'
+  return (
+    <div className={`${bgClr} flex flex-col overflow-hidden`}>
+      <div className={`flex items-center justify-between px-2 py-1.5 border-b ${borderClr} shrink-0`}>
+        <div className="flex items-center gap-2">
+          <span className={`text-[11px] font-extrabold ${titleClr}`}>{title}</span>
+          <span className={`text-[9px] px-1.5 py-0.5 rounded font-bold ${color === 'green' ? 'bg-green-900/40 text-green-400' : 'bg-red-900/40 text-red-400'}`}>{subtitle}</span>
+        </div>
+        <span className="text-gray-500 text-[10px] font-mono font-bold">{entries.length}</span>
+      </div>
+      <div className="flex-1 overflow-y-auto font-mono text-[10px]">
+        {entries.length === 0 && <p className="text-gray-600 text-center py-4 text-[11px]">No activity</p>}
+        {entries.map((f, i) => (
+          <div key={i} className={`flex items-center gap-2 px-2 py-[3px] border-b ${borderClr} hover:bg-white/[0.02]`}>
+            <span className="text-gray-400 w-12">{fmtTime(f.time).slice(0, 5)}</span>
+            <span className="text-white font-bold w-20">{f.strike}</span>
+            <span className="text-white w-14 text-right font-semibold">₹{f.price.toFixed(1)}</span>
+            <span className={`w-16 text-right ${f.volume > 5000 ? 'text-yellow-400 font-bold' : 'text-gray-300'}`}>{f.volume.toLocaleString()}</span>
+            <span className="text-gray-400 w-16 text-right">{f.oi.toLocaleString()}</span>
+            {f.buy_pct !== undefined && <span className={`w-10 text-right text-[9px] ${f.buy_pct > 55 ? 'text-green-400' : f.buy_pct < 45 ? 'text-red-400' : 'text-gray-500'}`}>{f.buy_pct}%</span>}
+            {f.iv !== undefined && f.iv > 0 && <span className="w-10 text-right text-[9px] text-yellow-400">{f.iv.toFixed(0)}IV</span>}
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
 
 /** Parse ISO or time string to HH:MM:SS in IST */
 function fmtTime(t: string): string {
@@ -29,12 +67,11 @@ function fmtTimeShort(t: string): string {
 
 export default function FlowDashboard({ state, onBack }: Props) {
   const { brain, confluence, flow_tape: tape, signal_history, detectors, ai_analysis, spot, atm, india_vix, fii_dii } = state
-  const [filter, setFilter] = useState<'ALL' | 'BUY' | 'SELL'>('ALL')
   const [expandedDet, setExpandedDet] = useState<string | null>(null)
   const [showAI, setShowAI] = useState(false)
 
   const sig = brain.active && brain.primary ? brain : null
-  const filtered = [...(tape || [])].filter(f => filter === 'ALL' || f.type === filter).reverse()
+  const allTape = [...(tape || [])]
   const detList = Object.values(detectors || {}).sort((a, b) => b.score - a.score)
   const history = signal_history ? [...signal_history].reverse().slice(0, 20) : []
 
@@ -133,45 +170,41 @@ export default function FlowDashboard({ state, onBack }: Props) {
           </div>
         </div>
 
-        {/* SECTION 3: DETAILED FLOW TAPE — center, scrollable */}
-        <div className="bg-tb-bg p-3 flex flex-col overflow-hidden">
-          <div className="flex items-center justify-between mb-2 shrink-0">
-            <h2 className="text-xs font-extrabold text-purple-400 uppercase tracking-widest">Options Flow Tape</h2>
-            <div className="flex items-center gap-1.5">
-              {(['ALL', 'BUY', 'SELL'] as const).map(f => (
-                <button key={f} onClick={() => setFilter(f)} className={`text-[10px] px-3 py-1 rounded-lg font-bold transition-all ${filter === f ? (f === 'BUY' ? 'bg-emerald-900/60 text-green-400 border border-green-700/40' : f === 'SELL' ? 'bg-red-900/60 text-red-400 border border-red-700/40' : 'bg-tb-surface text-cyan-400 border border-cyan-700/40') : 'text-gray-500 hover:text-gray-300 border border-transparent'}`}>{f}</button>
-              ))}
+        {/* SECTION 3: 4-QUADRANT FLOW TAPE — center */}
+        <div className="bg-tb-bg flex flex-col overflow-hidden">
+          {/* Quadrant header */}
+          <div className="flex items-center justify-between px-3 py-2 border-b border-gray-700 shrink-0">
+            <h2 className="text-xs font-extrabold text-purple-400 uppercase tracking-widest">Options Flow — 4 Quadrant</h2>
+            <div className="flex items-center gap-3 text-[10px] font-mono font-bold">
+              <span className="text-green-400">CE BUY {allTape.filter(t => getSide(t) === 'CE' && t.type === 'BUY').length}</span>
+              <span className="text-red-400">CE SELL {allTape.filter(t => getSide(t) === 'CE' && t.type === 'SELL').length}</span>
+              <span className="text-gray-400">|</span>
+              <span className="text-red-400">PE BUY {allTape.filter(t => getSide(t) === 'PE' && t.type === 'BUY').length}</span>
+              <span className="text-green-400">PE SELL {allTape.filter(t => getSide(t) === 'PE' && t.type === 'SELL').length}</span>
             </div>
           </div>
-          <div className="flex items-center gap-3 px-2 py-2 text-[10px] text-gray-400 uppercase font-mono font-bold border-b border-gray-700 shrink-0">
-            <span className="w-16">Time</span><span className="w-8">Idx</span><span className="w-24">Strike</span>
-            <span className="w-16 text-right">Price</span><span className="w-20 text-right">Volume</span>
-            <span className="w-20 text-right">OI</span><span className="w-20 text-right">Value</span><span className="w-16">Type</span>
-          </div>
-          <div className="flex-1 overflow-y-auto font-mono text-[11px]">
-            {filtered.length === 0 && <p className="text-gray-500 text-center py-10 text-sm">No flow data yet</p>}
-            {filtered.map((f, i) => {
-              const val = f.price * f.volume * 25
-              return (
-                <div key={i} className={`flex items-center gap-3 px-2 py-1.5 border-l-[3px] ${TYPE_BG[f.type]} hover:brightness-125 transition-all`}>
-                  <span className="text-gray-300 w-16 font-semibold">{fmtTime(f.time)}</span>
-                  <span className="text-gray-400 w-8">{(f.index || '').slice(0, 3)}</span>
-                  <span className="text-white font-bold w-24">{f.strike}</span>
-                  <span className="text-white w-16 text-right font-bold">₹{f.price.toFixed(1)}</span>
-                  <span className={`w-20 text-right font-bold ${f.volume > 5000 ? 'text-yellow-400' : 'text-gray-200'}`}>{f.volume.toLocaleString()}</span>
-                  <span className="text-gray-300 w-20 text-right">{f.oi.toLocaleString()}</span>
-                  <span className="text-gray-200 w-20 text-right font-semibold">{val > 1e7 ? `${(val / 1e7).toFixed(1)}Cr` : val > 1e5 ? `${(val / 1e5).toFixed(1)}L` : val.toLocaleString()}</span>
-                  <span className={`font-extrabold w-16 text-[12px] ${TYPE_CLR[f.type]}`}>{f.type === 'BUY' ? '▲ BUY' : f.type === 'SELL' ? '▼ SELL' : '— —'}</span>
-                </div>
-              )
-            })}
-          </div>
-          <div className="shrink-0 flex items-center justify-between mt-1.5 pt-1.5 border-t border-gray-700 text-[10px] font-mono">
-            <span className="text-gray-400 font-semibold">{filtered.length} entries</span>
-            <div className="flex gap-4">
-              <span className="text-green-400 font-bold">BUY {(tape || []).filter(t => t.type === 'BUY').length}</span>
-              <span className="text-red-400 font-bold">SELL {(tape || []).filter(t => t.type === 'SELL').length}</span>
-            </div>
+          {/* 2x2 Grid */}
+          <div className="flex-1 grid grid-cols-2 grid-rows-2 gap-[1px] bg-gray-700 overflow-hidden">
+            {/* CE BUYING — Bullish */}
+            <FlowQuadrant
+              title="📈 CALL BUYING" subtitle="Bullish" color="green"
+              entries={allTape.filter(t => getSide(t) === 'CE' && t.type === 'BUY').reverse().slice(0, 25)}
+            />
+            {/* PE BUYING — Bearish */}
+            <FlowQuadrant
+              title="📉 PUT BUYING" subtitle="Bearish" color="red"
+              entries={allTape.filter(t => getSide(t) === 'PE' && t.type === 'BUY').reverse().slice(0, 25)}
+            />
+            {/* CE SELLING — Bearish */}
+            <FlowQuadrant
+              title="📉 CALL SELLING" subtitle="Bearish" color="red"
+              entries={allTape.filter(t => getSide(t) === 'CE' && t.type === 'SELL').reverse().slice(0, 25)}
+            />
+            {/* PE SELLING — Bullish */}
+            <FlowQuadrant
+              title="📈 PUT SELLING" subtitle="Bullish" color="green"
+              entries={allTape.filter(t => getSide(t) === 'PE' && t.type === 'SELL').reverse().slice(0, 25)}
+            />
           </div>
         </div>
 

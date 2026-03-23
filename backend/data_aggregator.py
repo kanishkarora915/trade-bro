@@ -378,19 +378,25 @@ class UserAggregator:
                 state.error = ""
                 state.last_fetch = time.time()
 
-                # Flow tape entries
-                for strike in strikes_list[:10]:
+                # Flow tape entries — all strikes, lower threshold for better SELL detection
+                for strike in strikes_list:
                     for side in ("CE", "PE"):
                         info = state.chain[strike].get(side)
-                        if info and info.get("volume", 0) > 500:
+                        if info and info.get("volume", 0) > 200:
+                            bp = info.get("buy_pct", 0.5)
+                            flow_type = "BUY" if bp > 0.55 else "SELL" if bp < 0.45 else "NEUTRAL"
                             self.flow_tape.append({
                                 "time": datetime.now().isoformat(),
                                 "index": idx,
                                 "strike": f"{int(strike)} {side}",
+                                "side": side,  # separate CE/PE field
                                 "price": info["last_price"],
                                 "volume": info["volume"],
                                 "oi": info["oi"],
-                                "type": "BUY" if info.get("buy_pct", 0.5) > 0.6 else "SELL" if info.get("buy_pct", 0.5) < 0.4 else "NEUTRAL",
+                                "oi_chg": info.get("oi_day_change", 0),
+                                "buy_pct": round(bp * 100, 1),
+                                "iv": info.get("iv", 0),
+                                "type": flow_type,
                             })
 
             except Exception as e:
