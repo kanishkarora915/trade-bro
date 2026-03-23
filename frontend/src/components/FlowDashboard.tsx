@@ -120,10 +120,198 @@ export default function FlowDashboard({ state, onBack }: Props) {
         </div>
       </div>
 
-      {/* MAIN 3-COL GRID */}
-      <div className="flex-1 grid grid-cols-[300px_1fr_340px] gap-[1px] bg-tb-border overflow-hidden">
+      {/* HOT STRIKES + TRADE CONCLUSION — middle insight bar */}
+      <div className="shrink-0 grid grid-cols-2 gap-[1px] bg-tb-border border-b border-tb-border" style={{ maxHeight: '180px' }}>
+        {/* 🔥 HOT STRIKES — where max selling is happening */}
+        <div className="bg-gray-900/80 p-3 overflow-y-auto">
+          <h2 className="text-[11px] font-extrabold text-orange-400 uppercase tracking-widest mb-2">🔥 Hot Strikes — Heaviest Activity</h2>
+          {(() => {
+            // Aggregate flow tape by strike to find heaviest selling
+            const strikeMap: Record<string, { ce_sell: number; pe_sell: number; ce_buy: number; pe_buy: number; total_vol: number; last_price: number }> = {}
+            allTape.forEach(f => {
+              const stNum = f.strike.replace(/\s*(CE|PE)/, '').trim()
+              const side = getSide(f)
+              if (!strikeMap[stNum]) strikeMap[stNum] = { ce_sell: 0, pe_sell: 0, ce_buy: 0, pe_buy: 0, total_vol: 0, last_price: 0 }
+              strikeMap[stNum].total_vol += f.volume
+              if (side === 'CE' && f.type === 'SELL') strikeMap[stNum].ce_sell += f.volume
+              if (side === 'PE' && f.type === 'SELL') strikeMap[stNum].pe_sell += f.volume
+              if (side === 'CE' && f.type === 'BUY') strikeMap[stNum].ce_buy += f.volume
+              if (side === 'PE' && f.type === 'BUY') strikeMap[stNum].pe_buy += f.volume
+            })
+            // Also use chain_summary for OI data
+            const chain = state.chain_summary || []
+            chain.forEach(r => {
+              const stNum = r.strike.toString()
+              if (!strikeMap[stNum]) strikeMap[stNum] = { ce_sell: 0, pe_sell: 0, ce_buy: 0, pe_buy: 0, total_vol: 0, last_price: 0 }
+            })
+            const sorted = Object.entries(strikeMap)
+              .map(([strike, data]) => ({ strike: Number(strike), ...data, sell_total: data.ce_sell + data.pe_sell }))
+              .sort((a, b) => b.total_vol - a.total_vol)
+              .slice(0, 6)
+            const maxPeSell = Object.entries(strikeMap).sort((a, b) => b[1].pe_sell - a[1].pe_sell).slice(0, 3)
+            const maxCeSell = Object.entries(strikeMap).sort((a, b) => b[1].ce_sell - a[1].ce_sell).slice(0, 3)
+            return (
+              <div className="space-y-2">
+                <div className="grid grid-cols-2 gap-3">
+                  {/* Max PE Selling = Support = Bullish */}
+                  <div>
+                    <p className="text-[10px] text-green-400 font-bold mb-1.5">📈 MAX PUT SELLING <span className="text-gray-500">(Support/Bullish)</span></p>
+                    {maxPeSell.filter(([, d]) => d.pe_sell > 0).length === 0 && <p className="text-gray-600 text-[10px]">No PE selling detected</p>}
+                    {maxPeSell.filter(([, d]) => d.pe_sell > 0).map(([strike, data]) => (
+                      <div key={strike} className="flex items-center gap-2 py-[2px]">
+                        <span className="text-green-400 font-extrabold text-[13px] font-mono w-16">{strike}</span>
+                        <div className="flex-1 h-2 bg-gray-800 rounded-full overflow-hidden">
+                          <div className="h-full bg-green-500 rounded-full" style={{ width: `${Math.min(100, (data.pe_sell / (maxPeSell[0]?.[1]?.pe_sell || 1)) * 100)}%` }} />
+                        </div>
+                        <span className="text-green-400 text-[10px] font-mono font-bold w-16 text-right">{data.pe_sell.toLocaleString()}</span>
+                      </div>
+                    ))}
+                  </div>
+                  {/* Max CE Selling = Resistance = Bearish */}
+                  <div>
+                    <p className="text-[10px] text-red-400 font-bold mb-1.5">📉 MAX CALL SELLING <span className="text-gray-500">(Resistance/Bearish)</span></p>
+                    {maxCeSell.filter(([, d]) => d.ce_sell > 0).length === 0 && <p className="text-gray-600 text-[10px]">No CE selling detected</p>}
+                    {maxCeSell.filter(([, d]) => d.ce_sell > 0).map(([strike, data]) => (
+                      <div key={strike} className="flex items-center gap-2 py-[2px]">
+                        <span className="text-red-400 font-extrabold text-[13px] font-mono w-16">{strike}</span>
+                        <div className="flex-1 h-2 bg-gray-800 rounded-full overflow-hidden">
+                          <div className="h-full bg-red-500 rounded-full" style={{ width: `${Math.min(100, (data.ce_sell / (maxCeSell[0]?.[1]?.ce_sell || 1)) * 100)}%` }} />
+                        </div>
+                        <span className="text-red-400 text-[10px] font-mono font-bold w-16 text-right">{data.ce_sell.toLocaleString()}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+                {/* Top Active Strikes */}
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="text-[9px] text-gray-500 font-bold uppercase">Most Active:</span>
+                  {sorted.slice(0, 5).map(s => (
+                    <span key={s.strike} className={`text-[11px] font-mono font-bold px-2 py-0.5 rounded ${s.strike === atm ? 'bg-cyan-900/40 text-cyan-400 border border-cyan-700/30' : 'bg-gray-800 text-gray-300'}`}>
+                      {s.strike} <span className="text-gray-500">{s.total_vol.toLocaleString()}</span>
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )
+          })()}
+        </div>
 
-        {/* SECTION 2: SIGNAL HISTORY — left column (card layout) */}
+        {/* 💡 TRADE CONCLUSION — simple setup for normal person */}
+        <div className="bg-gray-900/80 p-3 overflow-y-auto">
+          <h2 className="text-[11px] font-extrabold text-yellow-400 uppercase tracking-widest mb-2">💡 Trade Conclusion — What To Do</h2>
+          {(() => {
+            const dir = confluence.direction
+            const score = confluence.score
+            const bull = dir === 'BULLISH'
+            const bear = dir === 'BEARISH'
+            const primary = brain.primary
+            const strength = brain.strength || (score >= 80 ? 'EXTREME' : score >= 60 ? 'STRONG' : score >= 40 ? 'MILD' : 'WEAK')
+            // Find support/resistance from chain
+            const chain = state.chain_summary || []
+            const maxPeOI = chain.reduce((max, r) => r.pe_oi > (max?.pe_oi || 0) ? r : max, chain[0])
+            const maxCeOI = chain.reduce((max, r) => r.ce_oi > (max?.ce_oi || 0) ? r : max, chain[0])
+            const support = maxPeOI?.strike || atm - 100
+            const resistance = maxCeOI?.strike || atm + 100
+
+            if (score < 30) {
+              return (
+                <div className="space-y-2">
+                  <div className="rounded-xl bg-gray-800/50 border border-gray-700 p-3 text-center">
+                    <p className="text-gray-400 text-sm font-bold mb-1">⏸ NO CLEAR TRADE</p>
+                    <p className="text-gray-500 text-[11px]">Confluence score {score.toFixed(0)}/100 — too low for a high-probability setup</p>
+                    <p className="text-yellow-500 text-[11px] mt-2 font-semibold">Wait for score above 50+ before entering</p>
+                  </div>
+                  <div className="grid grid-cols-2 gap-2 text-[11px] font-mono">
+                    <div className="bg-gray-800/30 rounded-lg p-2">
+                      <span className="text-gray-500 text-[9px] block">SUPPORT</span>
+                      <span className="text-green-400 font-bold text-sm">{support}</span>
+                      <span className="text-gray-600 text-[9px] block">Max PE OI</span>
+                    </div>
+                    <div className="bg-gray-800/30 rounded-lg p-2">
+                      <span className="text-gray-500 text-[9px] block">RESISTANCE</span>
+                      <span className="text-red-400 font-bold text-sm">{resistance}</span>
+                      <span className="text-gray-600 text-[9px] block">Max CE OI</span>
+                    </div>
+                  </div>
+                </div>
+              )
+            }
+
+            return (
+              <div className="space-y-2">
+                {/* Main trade box */}
+                <div className={`rounded-xl border p-3 ${bull ? 'border-green-600/50 bg-emerald-950/30' : bear ? 'border-red-600/50 bg-red-950/30' : 'border-gray-600 bg-gray-800/30'}`}>
+                  <div className="flex items-center justify-between mb-2">
+                    <div className="flex items-center gap-2">
+                      <span className={`text-xl font-black ${bull ? 'text-green-400' : bear ? 'text-red-400' : 'text-gray-300'}`}>
+                        {bull ? '🟢 BUY CALL' : bear ? '🔴 BUY PUT' : '⚪ WAIT'}
+                      </span>
+                      <span className={`text-[10px] px-2 py-0.5 rounded font-extrabold ${STR_CLR[strength] || 'bg-gray-700 text-gray-400'}`}>{strength}</span>
+                    </div>
+                    <span className={`text-lg font-black font-mono ${bull ? 'text-green-400' : bear ? 'text-red-400' : 'text-gray-400'}`}>{score.toFixed(0)}%</span>
+                  </div>
+                  {primary ? (
+                    <div className="grid grid-cols-5 gap-1 text-center">
+                      <div className="bg-black/20 rounded-lg p-2">
+                        <span className="text-gray-400 text-[9px] block font-bold">STRIKE</span>
+                        <span className="text-white font-extrabold text-[14px]">{primary.strike}</span>
+                      </div>
+                      <div className="bg-black/20 rounded-lg p-2">
+                        <span className="text-gray-400 text-[9px] block font-bold">ENTRY</span>
+                        <span className="text-cyan-400 font-extrabold text-[14px]">{primary.cmp}</span>
+                      </div>
+                      <div className="bg-black/20 rounded-lg p-2">
+                        <span className="text-gray-400 text-[9px] block font-bold">TARGET</span>
+                        <span className="text-green-400 font-extrabold text-[14px]">{primary.target1}</span>
+                      </div>
+                      <div className="bg-black/20 rounded-lg p-2">
+                        <span className="text-gray-400 text-[9px] block font-bold">STOP LOSS</span>
+                        <span className="text-red-400 font-extrabold text-[14px]">{primary.stop_loss}</span>
+                      </div>
+                      <div className="bg-black/20 rounded-lg p-2">
+                        <span className="text-gray-400 text-[9px] block font-bold">TIME</span>
+                        <span className="text-yellow-400 font-bold text-[11px]">{primary.time_limit}</span>
+                      </div>
+                    </div>
+                  ) : (
+                    <p className="text-gray-400 text-[11px] font-mono">Signal building... {dir} bias detected at {score.toFixed(0)}%</p>
+                  )}
+                </div>
+                {/* Support/Resistance + Why */}
+                <div className="grid grid-cols-3 gap-2 text-[11px] font-mono">
+                  <div className="bg-green-950/20 border border-green-800/30 rounded-lg p-2">
+                    <span className="text-gray-400 text-[9px] block font-bold">SUPPORT</span>
+                    <span className="text-green-400 font-extrabold text-sm">{support}</span>
+                    <span className="text-gray-600 text-[9px] block">Max PE OI</span>
+                  </div>
+                  <div className="bg-red-950/20 border border-red-800/30 rounded-lg p-2">
+                    <span className="text-gray-400 text-[9px] block font-bold">RESISTANCE</span>
+                    <span className="text-red-400 font-extrabold text-sm">{resistance}</span>
+                    <span className="text-gray-600 text-[9px] block">Max CE OI</span>
+                  </div>
+                  <div className="bg-gray-800/30 border border-gray-700/30 rounded-lg p-2">
+                    <span className="text-gray-400 text-[9px] block font-bold">RANGE</span>
+                    <span className="text-cyan-400 font-extrabold text-sm">{support}—{resistance}</span>
+                    <span className="text-gray-600 text-[9px] block">OI-based range</span>
+                  </div>
+                </div>
+                {/* Quick reason */}
+                <div className="text-[10px] text-gray-300 bg-gray-800/20 rounded-lg p-2 border border-gray-700/30 space-y-0.5">
+                  <p className="text-gray-500 font-bold uppercase text-[9px]">Why this trade?</p>
+                  {confluence.firing?.slice(0, 4).map((f, i) => (
+                    <p key={i} className="text-gray-300">• <span className={`font-bold ${f.status === 'CRITICAL' ? 'text-green-400' : f.status === 'ALERT' ? 'text-yellow-400' : 'text-gray-400'}`}>{f.name}</span>: {f.metric}</p>
+                  ))}
+                </div>
+              </div>
+            )
+          })()}
+        </div>
+      </div>
+
+      {/* MAIN 3-COL GRID */}
+      <div className="flex-1 grid grid-cols-[280px_1fr_340px] gap-[1px] bg-tb-border overflow-hidden">
+
+        {/* SECTION 2: SIGNAL HISTORY — left column */}
         <div className="bg-tb-bg p-3 flex flex-col overflow-hidden">
           <h2 className="text-xs font-extrabold text-green-400 uppercase tracking-widest mb-2 shrink-0">📡 Signal History ({history.length})</h2>
           <div className="flex-1 overflow-y-auto space-y-2">
