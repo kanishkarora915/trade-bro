@@ -69,14 +69,16 @@ class KiteClient:
         print(f"[KITE] Fetching instruments for {exchange}...")
         r = await self._get(f"/instruments/{exchange}")
         lines = r.text.strip().split("\n")
-        header = lines[0].split(",")
+        header = [h.strip().strip('"') for h in lines[0].split(",")]
         rows = []
         for line in lines[1:]:
-            vals = line.split(",")
+            vals = [v.strip().strip('"') for v in line.split(",")]
             if len(vals) == len(header):
                 rows.append(dict(zip(header, vals)))
         _instruments_cache[exchange] = (now, rows)
-        print(f"[KITE] Cached {len(rows)} instruments for {exchange}")
+        # Verify name field is clean (no stray quotes)
+        sample_names = set(r.get("name", "") for r in rows[:100])
+        print(f"[KITE] Cached {len(rows)} instruments for {exchange}, sample names: {list(sample_names)[:5]}")
         return rows
 
     async def get_options(self, name: str = "NIFTY", expiry: str | None = None) -> list[dict]:
