@@ -1,4 +1,4 @@
-"""Detector 7 — Block Print / Dark Trade Identifier. Catches single massive trades (500+ lots)."""
+"""Detector 7 — Block Print / Dark Trade Identifier. Catches single massive trades (300+ lots)."""
 
 
 def detect(data: dict) -> dict:
@@ -8,17 +8,21 @@ def detect(data: dict) -> dict:
 
     for t in trade_log:
         size = t.get("size", 0)
-        if size < 500:
+        if size < 300:
             continue
 
-        if size >= 2000:
+        if size >= 1500:
             status = "CRITICAL"
             label = "DARK PRINT"
-            sc = 90 + min(10, (size - 2000) / 2000 * 10)
-        else:
+            sc = 90 + min(10, (size - 1500) / 1500 * 10)
+        elif size >= 700:
             status = "ALERT"
             label = "BLOCK PRINT"
-            sc = 40 + (size - 500) / 1500 * 50
+            sc = 60 + (size - 700) / 800 * 30
+        else:
+            status = "WATCH"
+            label = "LARGE TRADE"
+            sc = 25 + (size - 300) / 400 * 35
 
         sc = min(100, sc)
         top_score = max(top_score, sc)
