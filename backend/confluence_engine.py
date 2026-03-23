@@ -111,6 +111,16 @@ def calculate(detector_results: dict, is_expiry_day: bool = False) -> dict:
     # Normalize to 100
     normalized = (raw_score / TOTAL_MAX_POINTS) * 100
 
+    # CRITICAL detector boost — strong signals from few detectors should push score up
+    critical_count = sum(1 for r in detector_results.values() if r.get("status") == "CRITICAL")
+    alert_count = sum(1 for r in detector_results.values() if r.get("status") in ("CRITICAL", "ALERT"))
+    if critical_count >= 3:
+        normalized = min(100, normalized * 2.5)
+    elif critical_count >= 2:
+        normalized = min(100, normalized * 2.0)
+    elif critical_count >= 1 and alert_count >= 2:
+        normalized = min(100, normalized * 1.6)
+
     # Apply time multiplier
     time_mult = _time_multiplier()
     normalized = min(100, normalized * time_mult)

@@ -9,15 +9,29 @@ def generate(confluence: dict, detector_results: dict, data: dict) -> dict:
     spot = data.get("spot", 24300)
     atm = data.get("atm", 24300)
 
-    if score < 51 or direction == "NEUTRAL":
+    # Count CRITICAL detectors — if 2+ are CRITICAL, lower threshold significantly
+    critical_count = sum(1 for d in detector_results.values() if d.get("status") == "CRITICAL")
+    alert_count = sum(1 for d in detector_results.values() if d.get("status") in ("CRITICAL", "ALERT"))
+
+    # Dynamic threshold: base 40, drops to 20 with 2+ CRITICAL detectors
+    threshold = 40
+    if critical_count >= 3:
+        threshold = 15
+    elif critical_count >= 2:
+        threshold = 20
+    elif alert_count >= 3:
+        threshold = 25
+
+    if score < threshold or direction == "NEUTRAL":
         return {
             "active": False,
-            "message": "No trade — score below threshold",
+            "message": f"No trade — score {score:.0f} below threshold ({threshold})",
             "score": score,
             "direction": direction,
             "primary": None,
             "secondary": None,
             "exit_rules": [],
+            "firing": confluence.get("firing", []),
         }
 
     # Find the hottest strike

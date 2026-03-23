@@ -353,7 +353,16 @@ async def websocket_endpoint(ws: WebSocket, session_id: str):
                 idx = msg.split(":")[1].strip().upper()
                 if idx in ("NIFTY", "BANKNIFTY", "SENSEX"):
                     agg.active_index = idx
-                    state = agg.get_state()
+                    # If this index has no chain data, build it immediately
+                    idx_state = agg.indices.get(idx)
+                    if idx_state and len(idx_state.chain) == 0:
+                        try:
+                            state = await agg.run_cycle(idx)
+                        except Exception as e:
+                            print(f"[WS] Switch cycle error for {idx}: {e}")
+                            state = agg.get_state()
+                    else:
+                        state = agg.get_state()
                     await ws.send_text(json.dumps(state, default=str))
             elif msg == "toggle_vix":
                 agg.vix_enabled = not agg.vix_enabled
