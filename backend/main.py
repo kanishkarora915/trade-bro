@@ -158,40 +158,57 @@ async def debug_chain():
 
     # Try a fresh instruments + options check
     try:
-        # Find any valid session to test with
         for sid, agg in user_aggregators.items():
             kite = agg.kite
             from datetime import datetime
             today_str = datetime.now().strftime("%Y-%m-%d")
 
-            # Check instruments
+            # Check instruments — raw CSV analysis
             instruments = await kite.get_instruments("NFO")
-            nifty_opts = [i for i in instruments if i.get("name") == "NIFTY" and i.get("instrument_type") in ("CE", "PE") and i.get("segment") == "NFO-OPT"]
-            all_expiries = sorted(set(i["expiry"] for i in nifty_opts))
-            future_expiries = [e for e in all_expiries if e >= today_str]
-
             debug["instruments_total"] = len(instruments)
-            debug["nifty_options_total"] = len(nifty_opts)
-            debug["all_expiries"] = all_expiries[:5]
-            debug["future_expiries"] = future_expiries[:5]
             debug["today"] = today_str
 
-            # Try building chain
-            if agg.indices["NIFTY"].spot > 0:
-                try:
-                    chain_data = await kite.build_option_chain(
-                        agg.indices["NIFTY"].spot, name="NIFTY", strike_step=50, chain_range=500
-                    )
-                    debug["test_chain_atm"] = chain_data.get("atm")
-                    debug["test_chain_expiry"] = chain_data.get("expiry")
-                    debug["test_chain_strikes"] = len(chain_data.get("chain", {}))
-                    if chain_data.get("chain"):
-                        first_strike = list(chain_data["chain"].keys())[0]
-                        debug["test_first_strike"] = first_strike
-                        debug["test_first_ce"] = chain_data["chain"][first_strike].get("CE") is not None
-                        debug["test_first_pe"] = chain_data["chain"][first_strike].get("PE") is not None
-                except Exception as e:
-                    debug["test_chain_error"] = str(e)[:300]
+            # Show CSV headers (column names from first instrument)
+            if instruments:
+                debug["csv_columns"] = list(instruments[0].keys())
+                # Sample first instrument
+                debug["sample_instrument"] = instruments[0]
+
+            # Check all unique values for key fields
+            all_names = set(i.get("name", "") for i in instruments)
+            all_types = set(i.get("instrument_type", "") for i in instruments)
+            all_segments = set(i.get("segment", "") for i in instruments)
+
+            # Find NIFTY-related names
+            nifty_names = [n for n in all_names if "NIFTY" in n.upper()] if all_names else []
+            debug["nifty_related_names"] = sorted(nifty_names)[:10]
+            debug["all_instrument_types"] = sorted(list(all_types))[:10]
+            debug["all_segments"] = sorted(list(all_segments))[:10]
+
+            # Try different filters to find NIFTY options
+            by_name = [i for i in instruments if i.get("name") == "NIFTY"]
+            by_name_upper = [i for i in instruments if i.get("name", "").upper() == "NIFTY"]
+            by_name_contains = [i for i in instruments if "NIFTY" in i.get("name", "").upper()]
+            by_tradingsymbol = [i for i in instruments if i.get("tradingsymbol", "").startswith("NIFTY")]
+
+            debug["filter_name_exact"] = len(by_name)
+            debug["filter_name_upper"] = len(by_name_upper)
+            debug["filter_name_contains"] = len(by_name_contains)
+            debug["filter_tradingsymbol_starts"] = len(by_tradingsymbol)
+
+            # Show sample NIFTY option if found via tradingsymbol
+            nifty_by_ts = [i for i in by_tradingsymbol if i.get("instrument_type") in ("CE", "PE")]
+            if not nifty_by_ts:
+                # Try case-insensitive
+                nifty_by_ts = [i for i in by_tradingsymbol if i.get("instrument_type", "").upper() in ("CE", "PE")]
+            debug["nifty_options_via_tradingsymbol"] = len(nifty_by_ts)
+            if nifty_by_ts:
+                debug["sample_nifty_option"] = nifty_by_ts[0]
+
+            # Full filter match
+            nifty_opts = [i for i in instruments if i.get("name") == "NIFTY" and i.get("instrument_type") in ("CE", "PE") and i.get("segment") == "NFO-OPT"]
+            debug["nifty_options_full_filter"] = len(nifty_opts)
+
             break
     except Exception as e:
         debug["debug_error"] = str(e)[:300]
