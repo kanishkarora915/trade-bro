@@ -133,6 +133,72 @@ async def health():
     }
 
 
+# --- Debug chain ---
+@app.get("/api/debug/chain")
+async def debug_chain():
+    """Debug endpoint to diagnose why chain is empty."""
+    from data_aggregator import user_aggregators
+    debug = {"aggregators": len(user_aggregators), "sessions": []}
+    for sid, agg in user_aggregators.items():
+        active = agg.indices.get(agg.active_index)
+        sess_info = {
+            "session_id": sid[:8],
+            "active_index": agg.active_index,
+            "spot": active.spot if active else 0,
+            "atm": active.atm if active else 0,
+            "chain_len": len(active.chain) if active else 0,
+            "chain_summary_len": len(active._chain_summary()) if active else 0,
+            "strike_map_len": len(active.strike_map) if active else 0,
+            "error": active.error if active else "",
+            "last_fetch": active.last_fetch if active else 0,
+            "detectors_count": len(active.detectors) if active else 0,
+            "vix": agg.india_vix,
+        }
+        debug["sessions"].append(sess_info)
+
+    # Try a fresh instruments + options check
+    try:
+        # Find any valid session to test with
+        for sid, agg in user_aggregators.items():
+            kite = agg.kite
+            from datetime import datetime
+            today_str = datetime.now().strftime("%Y-%m-%d")
+
+            # Check instruments
+            instruments = await kite.get_instruments("NFO")
+            nifty_opts = [i for i in instruments if i.get("name") == "NIFTY" and i.get("instrument_type") in ("CE", "PE") and i.get("segment") == "NFO-OPT"]
+            all_expiries = sorted(set(i["expiry"] for i in nifty_opts))
+            future_expiries = [e for e in all_expiries if e >= today_str]
+
+            debug["instruments_total"] = len(instruments)
+            debug["nifty_options_total"] = len(nifty_opts)
+            debug["all_expiries"] = all_expiries[:5]
+            debug["future_expiries"] = future_expiries[:5]
+            debug["today"] = today_str
+
+            # Try building chain
+            if agg.indices["NIFTY"].spot > 0:
+                try:
+                    chain_data = await kite.build_option_chain(
+                        agg.indices["NIFTY"].spot, name="NIFTY", strike_step=50, chain_range=500
+                    )
+                    debug["test_chain_atm"] = chain_data.get("atm")
+                    debug["test_chain_expiry"] = chain_data.get("expiry")
+                    debug["test_chain_strikes"] = len(chain_data.get("chain", {}))
+                    if chain_data.get("chain"):
+                        first_strike = list(chain_data["chain"].keys())[0]
+                        debug["test_first_strike"] = first_strike
+                        debug["test_first_ce"] = chain_data["chain"][first_strike].get("CE") is not None
+                        debug["test_first_pe"] = chain_data["chain"][first_strike].get("PE") is not None
+                except Exception as e:
+                    debug["test_chain_error"] = str(e)[:300]
+            break
+    except Exception as e:
+        debug["debug_error"] = str(e)[:300]
+
+    return debug
+
+
 # --- License ---
 @app.post("/api/license/verify")
 async def verify_license(req: LicenseRequest, request: Request):
