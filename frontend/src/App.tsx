@@ -60,19 +60,7 @@ export default function App() {
 
   // Flow Dashboard — 2nd screen
   if (activeTab === 'flow') {
-    return (
-      <FlowDashboard
-        tape={state.flow_tape || []}
-        brain={state.brain}
-        lastSignal={state.last_signal}
-        signalHistory={state.signal_history}
-        chain={state.chain_summary || []}
-        confluence={state.confluence}
-        spot={state.spot}
-        atm={state.atm}
-        onBack={() => setActiveTab('main')}
-      />
-    )
+    return <FlowDashboard state={state} onBack={() => setActiveTab('main')} />
   }
 
   const flash = state.confluence.score >= 86 ? 'flash-red' : state.confluence.score >= 76 ? 'flash-green' : ''

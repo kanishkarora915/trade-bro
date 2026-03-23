@@ -98,6 +98,7 @@ class UserAggregator:
         self.fii_dii: dict = {}
         self.india_vix: float = 0.0
         self.vix_enabled: bool = True  # VIX integration toggle
+        self.skew_history: dict[str, list[dict]] = {k: [] for k in INDICES}  # per-index IV skew history
         self._prev_scores: dict[str, float] = {}
         self._cache: dict[str, tuple[float, dict]] = {}
         self._spot_cache: dict[str, tuple[float, float]] = {}
@@ -232,6 +233,14 @@ class UserAggregator:
                 state.atm = chain_data.get("atm", 0)
                 state.chain = chain_data.get("chain", {})
 
+                # Record IV skew history for Skew Shift detector
+                atm_data = state.chain.get(state.atm, {})
+                ce_iv = (atm_data.get("CE") or {}).get("iv", 0)
+                pe_iv = (atm_data.get("PE") or {}).get("iv", 0)
+                if ce_iv > 0 and pe_iv > 0:
+                    self.skew_history[idx].append({"ce_iv": ce_iv, "pe_iv": pe_iv, "ts": time.time()})
+                    self.skew_history[idx] = self.skew_history[idx][-50:]  # keep last 50
+
                 # Subscribe ticker (non-blocking, won't fail if ticker is off)
                 await self._subscribe_ticker(state.chain, idx)
 
@@ -250,7 +259,7 @@ class UserAggregator:
                     "spot": spot, "atm": state.atm, "chain": state.chain,
                     "trade_log": trade_log,
                     "sweep_events": sweep_events,
-                    "skew_history": [],
+                    "skew_history": self.skew_history.get(idx, []),
                     "banknifty": {"nifty_change_pct": 0, "expected_bn_change_pct": 0, "actual_bn_change_pct": 0},
                     "fii_dii": {
                         "fii_net_cr": self.fii_dii.get("fii_net_cr", 0),

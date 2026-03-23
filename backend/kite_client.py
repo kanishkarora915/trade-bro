@@ -1,9 +1,66 @@
-"""Zerodha Kite Connect API wrapper — per-user sessions with global caching."""
+"""Zerodha Kite Connect API wrapper — per-user sessions with global caching + IV calculation."""
 import hashlib
+import math
 import time
 import httpx
 from datetime import datetime, timedelta
 from config import NIFTY_STRIKE_STEP, OPTION_CHAIN_RANGE
+
+
+# --- Black-Scholes IV Solver ---
+def _norm_cdf(x: float) -> float:
+    """Standard normal CDF approximation (Abramowitz & Stegun)."""
+    a1, a2, a3, a4, a5 = 0.254829592, -0.284496736, 1.421413741, -1.453152027, 1.061405429
+    p = 0.3275911
+    sign = 1 if x >= 0 else -1
+    x = abs(x)
+    t = 1.0 / (1.0 + p * x)
+    y = 1.0 - (((((a5 * t + a4) * t) + a3) * t + a2) * t + a1) * t * math.exp(-x * x / 2.0)
+    return 0.5 * (1.0 + sign * y)
+
+
+def _bs_price(S: float, K: float, T: float, r: float, sigma: float, is_call: bool) -> float:
+    """Black-Scholes option price."""
+    if sigma <= 0 or T <= 0 or S <= 0 or K <= 0:
+        return 0.0
+    d1 = (math.log(S / K) + (r + sigma * sigma / 2) * T) / (sigma * math.sqrt(T))
+    d2 = d1 - sigma * math.sqrt(T)
+    if is_call:
+        return S * _norm_cdf(d1) - K * math.exp(-r * T) * _norm_cdf(d2)
+    else:
+        return K * math.exp(-r * T) * _norm_cdf(-d2) - S * _norm_cdf(-d1)
+
+
+def _bs_vega(S: float, K: float, T: float, r: float, sigma: float) -> float:
+    """Black-Scholes vega (sensitivity to volatility)."""
+    if sigma <= 0 or T <= 0 or S <= 0 or K <= 0:
+        return 0.0
+    d1 = (math.log(S / K) + (r + sigma * sigma / 2) * T) / (sigma * math.sqrt(T))
+    return S * math.sqrt(T) * math.exp(-d1 * d1 / 2) / math.sqrt(2 * math.pi)
+
+
+def calculate_iv(option_price: float, spot: float, strike: float, T: float, is_call: bool,
+                 r: float = 0.07, max_iter: int = 20) -> float:
+    """Calculate implied volatility using Newton-Raphson. Returns IV as percentage (e.g., 18.5)."""
+    if option_price <= 0 or spot <= 0 or strike <= 0 or T <= 0:
+        return 0.0
+    # Intrinsic value check
+    intrinsic = max(0, spot - strike) if is_call else max(0, strike - spot)
+    if option_price < intrinsic * 0.5:
+        return 0.0
+
+    sigma = 0.25  # initial guess 25%
+    for _ in range(max_iter):
+        price = _bs_price(spot, strike, T, r, sigma, is_call)
+        vega = _bs_vega(spot, strike, T, r, sigma)
+        if vega < 1e-8:
+            break
+        sigma = sigma - (price - option_price) / vega
+        if sigma <= 0.01:
+            sigma = 0.01
+        if sigma > 5.0:
+            return 0.0  # diverged
+    return round(sigma * 100, 2)  # return as percentage
 
 BASE = "https://api.kite.trade"
 LOGIN_URL = "https://kite.zerodha.com/connect/login?v=3&api_key="
@@ -160,6 +217,18 @@ class KiteClient:
         if trading_symbols:
             quotes = await self.get_quote(trading_symbols[:500])
 
+        # Calculate time to expiry for IV calculation
+        expiry_date_str = opts[0].get("expiry", "") if opts else ""
+        T = 1 / 365  # default 1 day
+        if expiry_date_str:
+            try:
+                exp_dt = datetime.strptime(expiry_date_str, "%Y-%m-%d").replace(hour=15, minute=30)
+                now = datetime.now()
+                diff = (exp_dt - now).total_seconds()
+                T = max(diff / (365 * 24 * 3600), 0.0001)  # in years, min ~1 hour
+            except ValueError:
+                pass
+
         chain: dict[float, dict] = {}
         for o in filtered:
             strike = float(o["strike"])
@@ -186,6 +255,10 @@ class KiteClient:
             ask_price = depth_sell[0].get("price", 0) if depth_sell else 0
             spread_base = max(0.05, (ask_price - bid_price)) if bid_price > 0 and ask_price > 0 else 1.0
 
+            # Calculate Implied Volatility using Black-Scholes
+            is_call = (side == "CE")
+            iv = calculate_iv(last_price, spot_price, strike, T, is_call)
+
             chain[strike][side] = {
                 "tradingsymbol": o["tradingsymbol"],
                 "instrument_token": o["instrument_token"],
@@ -199,7 +272,7 @@ class KiteClient:
                 "ask_qty": depth_sell[0].get("quantity", 0) if depth_sell else 0,
                 "buy_quantity": total_buy_qty,
                 "sell_quantity": total_sell_qty,
-                "iv": 0,
+                "iv": iv,
                 "buy_pct": real_buy_pct,
                 "avg_5d_volume": avg_5d,
                 "spread_baseline": spread_base,
@@ -215,7 +288,7 @@ class KiteClient:
 
         return {
             "atm": atm,
-            "expiry": opts[0]["expiry"] if opts else "",
+            "expiry": expiry_date_str,
             "chain": dict(sorted(chain.items())),
             "timestamp": datetime.now().isoformat(),
         }
