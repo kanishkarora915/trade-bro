@@ -66,7 +66,7 @@ export default function FlowDashboard({ state, onBack }: Props) {
       </div>
 
       {/* MAIN 3-COL GRID */}
-      <div className="flex-1 grid grid-cols-[280px_1fr_260px] gap-[1px] bg-tb-border overflow-hidden">
+      <div className="flex-1 grid grid-cols-[280px_1fr_320px] gap-[1px] bg-tb-border overflow-hidden">
 
         {/* SECTION 2: SIGNAL HISTORY — left column */}
         <div className="bg-tb-bg p-2 flex flex-col overflow-hidden">
@@ -104,25 +104,25 @@ export default function FlowDashboard({ state, onBack }: Props) {
               ))}
             </div>
           </div>
-          <div className="flex items-center gap-2 px-1 py-1 text-[8px] text-tb-muted/50 uppercase font-mono border-b border-tb-border shrink-0">
-            <span className="w-14">Time</span><span className="w-8">Idx</span><span className="w-20">Strike</span>
-            <span className="w-14 text-right">Price</span><span className="w-14 text-right">Vol</span>
-            <span className="w-16 text-right">OI</span><span className="w-20 text-right">Value(₹)</span><span className="w-12">Type</span>
+          <div className="flex items-center gap-2 px-1 py-1.5 text-[9px] text-tb-muted/70 uppercase font-mono font-bold border-b border-tb-border shrink-0">
+            <span className="w-16">Time</span><span className="w-8">Idx</span><span className="w-24">Strike</span>
+            <span className="w-16 text-right">Price</span><span className="w-16 text-right">Vol</span>
+            <span className="w-18 text-right">OI</span><span className="w-20 text-right">Value(₹)</span><span className="w-14">Type</span>
           </div>
-          <div className="flex-1 overflow-y-auto font-mono text-[10px] space-y-px">
+          <div className="flex-1 overflow-y-auto font-mono text-[11px] space-y-px">
             {filtered.length === 0 && <p className="text-tb-muted text-center py-8">No flow data yet</p>}
             {filtered.map((f, i) => {
               const val = f.price * f.volume * 25 // estimated lot_size
               return (
-                <div key={i} className={`flex items-center gap-2 px-1 py-[4px] rounded border-l-2 ${TYPE_BG[f.type]} hover:bg-tb-surface/20`}>
-                  <span className="text-tb-muted/50 w-14">{new Date(f.time).toLocaleTimeString('en-IN', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' })}</span>
+                <div key={i} className={`flex items-center gap-2 px-2 py-[5px] rounded-lg border-l-3 ${TYPE_BG[f.type]} hover:bg-tb-surface/20`}>
+                  <span className="text-tb-muted/70 w-16">{new Date(f.time).toLocaleTimeString('en-IN', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' })}</span>
                   <span className="text-tb-muted w-8">{(f.index || '').slice(0, 3)}</span>
-                  <span className="text-tb-text font-semibold w-20">{f.strike}</span>
-                  <span className="text-tb-text w-14 text-right">₹{f.price.toFixed(1)}</span>
-                  <span className={`w-14 text-right ${f.volume > 5000 ? 'text-neon-yellow font-bold' : 'text-tb-muted'}`}>{f.volume.toLocaleString()}</span>
-                  <span className="text-tb-muted w-16 text-right">{f.oi.toLocaleString()}</span>
-                  <span className="text-tb-muted w-20 text-right">{val > 1e7 ? `${(val / 1e7).toFixed(1)}Cr` : val > 1e5 ? `${(val / 1e5).toFixed(1)}L` : val.toLocaleString()}</span>
-                  <span className={`font-bold w-12 ${TYPE_CLR[f.type]}`}>{f.type === 'BUY' ? '▲ BUY' : f.type === 'SELL' ? '▼ SELL' : '—'}</span>
+                  <span className="text-white font-bold w-24">{f.strike}</span>
+                  <span className="text-white w-16 text-right font-semibold">₹{f.price.toFixed(1)}</span>
+                  <span className={`w-16 text-right font-semibold ${f.volume > 5000 ? 'text-neon-yellow' : 'text-tb-text/80'}`}>{f.volume.toLocaleString()}</span>
+                  <span className="text-tb-text/60 w-18 text-right">{f.oi.toLocaleString()}</span>
+                  <span className="text-tb-text/80 w-20 text-right font-semibold">{val > 1e7 ? `${(val / 1e7).toFixed(1)}Cr` : val > 1e5 ? `${(val / 1e5).toFixed(1)}L` : val.toLocaleString()}</span>
+                  <span className={`font-extrabold w-14 ${TYPE_CLR[f.type]}`}>{f.type === 'BUY' ? '▲ BUY' : f.type === 'SELL' ? '▼ SELL' : '— —'}</span>
                 </div>
               )
             })}
@@ -137,27 +137,44 @@ export default function FlowDashboard({ state, onBack }: Props) {
         </div>
 
         {/* SECTION 4: DETECTOR BREAKDOWN — right column */}
-        <div className="bg-tb-bg p-2 flex flex-col overflow-hidden">
-          <h2 className="text-[10px] font-bold text-neon-cyan uppercase tracking-widest mb-1.5 shrink-0">Detectors ({detList.length})</h2>
-          <div className="flex-1 overflow-y-auto space-y-1">
-            {detList.length === 0 && <p className="text-tb-muted text-[10px] text-center py-6">No detector data</p>}
+        <div className="bg-tb-bg p-3 flex flex-col overflow-hidden">
+          <h2 className="text-xs font-extrabold text-neon-cyan uppercase tracking-widest mb-2 shrink-0">Detectors ({detList.length})</h2>
+          <div className="flex-1 overflow-y-auto space-y-1.5">
+            {detList.length === 0 && <p className="text-tb-muted text-sm text-center py-6">No detector data</p>}
             {detList.map((d: DetectorResult) => (
-              <div key={d.id} className="border border-tb-border/40 rounded-lg p-1.5 hover:bg-tb-surface/20 cursor-pointer transition-colors" onClick={() => setExpandedDet(expandedDet === d.id ? null : d.id)}>
-                <div className="flex items-center justify-between mb-0.5">
-                  <span className="text-[9px] font-bold text-tb-text truncate max-w-[140px]">{d.name}</span>
-                  <span className={`text-[8px] px-1.5 py-0.5 rounded font-bold ${DET_CLR[d.status]} bg-tb-surface/50`}>{d.status}</span>
-                </div>
-                <div className="flex items-center gap-1.5 mb-0.5">
-                  <div className="flex-1 h-1 bg-tb-surface rounded-full overflow-hidden">
-                    <div className={`h-full rounded-full ${DET_BAR[d.status]}`} style={{ width: `${Math.min(d.score, 100)}%` }} />
+              <div key={d.id} className={`border rounded-xl p-2.5 cursor-pointer transition-all ${
+                d.status === 'CRITICAL' ? 'border-neon-green/40 bg-emerald-950/15' :
+                d.status === 'ALERT' ? 'border-neon-green/25 bg-emerald-950/8' :
+                d.status === 'WATCH' ? 'border-neon-yellow/25 bg-yellow-950/8' :
+                'border-tb-border/30 hover:bg-tb-surface/15'
+              }`} onClick={() => setExpandedDet(expandedDet === d.id ? null : d.id)}>
+                <div className="flex items-center justify-between mb-1">
+                  <span className={`text-[11px] font-bold truncate max-w-[180px] ${d.score > 0 ? 'text-white' : 'text-tb-muted'}`}>{d.name}</span>
+                  <div className="flex items-center gap-1.5">
+                    <span className={`text-[11px] font-mono font-bold ${d.score >= 70 ? 'text-neon-green' : d.score >= 30 ? 'text-neon-yellow' : 'text-tb-muted/60'}`}>{d.score}</span>
+                    <span className={`text-[9px] px-2 py-0.5 rounded-md font-extrabold ${
+                      d.status === 'CRITICAL' ? 'bg-neon-green/20 text-neon-green' :
+                      d.status === 'ALERT' ? 'bg-neon-green/15 text-neon-green/90' :
+                      d.status === 'WATCH' ? 'bg-neon-yellow/15 text-neon-yellow' :
+                      'bg-tb-surface/40 text-tb-muted/50'
+                    }`}>{d.status}</span>
                   </div>
-                  <span className="text-[8px] font-mono text-tb-muted w-6 text-right">{d.score}</span>
                 </div>
-                <p className="text-[8px] text-tb-muted/70 truncate">{d.metric}</p>
+                <div className="flex items-center gap-2 mb-1">
+                  <div className="flex-1 h-1.5 bg-tb-surface rounded-full overflow-hidden">
+                    <div className={`h-full rounded-full transition-all ${
+                      d.status === 'CRITICAL' ? 'bg-neon-green' :
+                      d.status === 'ALERT' ? 'bg-neon-green/80' :
+                      d.status === 'WATCH' ? 'bg-neon-yellow' :
+                      'bg-tb-muted/20'
+                    }`} style={{ width: `${Math.min(d.score, 100)}%` }} />
+                  </div>
+                </div>
+                <p className={`text-[10px] truncate ${d.score > 0 ? 'text-tb-text/80' : 'text-tb-muted/40'}`}>{d.metric}</p>
                 {expandedDet === d.id && d.alerts && d.alerts.length > 0 && (
-                  <div className="mt-1 pt-1 border-t border-tb-border/30 space-y-0.5">
+                  <div className="mt-1.5 pt-1.5 border-t border-tb-border/30 space-y-1">
                     {d.alerts.slice(0, 5).map((a: any, i: number) => (
-                      <p key={i} className="text-[8px] text-neon-yellow/80">{typeof a === 'string' ? a : JSON.stringify(a)}</p>
+                      <p key={i} className="text-[10px] text-neon-yellow/90 font-mono">{typeof a === 'string' ? a : JSON.stringify(a)}</p>
                     ))}
                   </div>
                 )}
