@@ -13,6 +13,9 @@ from ai_analyst import generate_analysis
 from detectors import ALL_DETECTORS
 from confluence_engine import calculate
 from brain_signal import generate
+from timeframe_engine import TimeframeEngine
+from data_store import DataStore
+from mtf_analyzer import analyze_mtf
 
 INDICES = {
     "NIFTY": {"symbol": "NSE:NIFTY 50", "name": "NIFTY", "strike_step": 50, "range": 500, "lot": 25},
@@ -98,6 +101,12 @@ class UserAggregator:
         self.fii_dii: dict = {}
         self.india_vix: float = 0.0
         self.vix_enabled: bool = True  # VIX integration toggle
+        self.tf_engine = TimeframeEngine(kite)
+        self.data_store = DataStore()
+        self.mtf_analysis: dict = {}
+        self._last_tf_short: float = 0  # last short TF refresh
+        self._last_tf_long: float = 0   # last long TF refresh
+        self._last_auto_save: float = 0 # last auto-save
         self.skew_history: dict[str, list[dict]] = {k: [] for k in INDICES}
         # Gap & Trend tracking
         self.trend_data: dict[str, dict] = {}  # per-index trend info
@@ -282,6 +291,70 @@ class UserAggregator:
                 except Exception as e:
                     print(f"[AGG] Trend calc error for {idx}: {e}")
 
+    async def _refresh_timeframes(self, targets: list):
+        """Refresh timeframe data at staggered intervals."""
+        now = time.time()
+        idx = self.active_index
+
+        try:
+            # Short timeframes: every 3 min
+            if now - self._last_tf_short > 180:
+                tf_data = await self.tf_engine.fetch_all(idx, short_only=True)
+                self._last_tf_short = now
+
+            # Long timeframes: every 15 min
+            if now - self._last_tf_long > 900:
+                tf_data = await self.tf_engine.fetch_all(idx, short_only=False)
+                self._last_tf_long = now
+
+            # Get all cached data and run MTF analysis
+            all_tf = self.tf_engine.get_cached(idx)
+            if all_tf:
+                active = self.indices.get(idx)
+                chain = active._chain_summary() if active else []
+                self.mtf_analysis = analyze_mtf(all_tf, active.spot if active else 0, active.atm if active else 0, chain)
+
+            # Auto-save every 30 min
+            if now - self._last_auto_save > 1800:
+                self._auto_save_snapshot()
+                self._last_auto_save = now
+
+        except Exception as e:
+            print(f"[AGG] Timeframe error: {e}")
+
+    def _auto_save_snapshot(self):
+        """Auto-save current state to persistent storage."""
+        try:
+            idx = self.active_index
+            active = self.indices.get(idx)
+            if not active or active.spot <= 0:
+                return
+
+            chain = active._chain_summary()
+            td = self.trend_data.get(idx, {})
+
+            # Extract supports/resistances from MTF analysis
+            supports = []
+            resistances = []
+            if self.mtf_analysis:
+                kl = self.mtf_analysis.get("key_levels", {})
+                supports = [{"level": v, "source": k} for k, v in kl.items() if "support" in k and v > 0]
+                resistances = [{"level": v, "source": k} for k, v in kl.items() if "resistance" in k and v > 0]
+
+            self.data_store.auto_save(
+                index=idx,
+                spot=active.spot,
+                atm=active.atm,
+                chain_summary=chain,
+                supports=supports,
+                resistances=resistances,
+                trend_data=td,
+                confluence=active.confluence,
+                signals=self.signal_history,
+            )
+        except Exception as e:
+            print(f"[AGG] Auto-save error: {e}")
+
     async def run_cycle(self, index_id: str | None = None) -> dict:
         """Run detectors for active index only (not all 3) for speed."""
         # Only run active index to avoid 3x API calls
@@ -320,6 +393,9 @@ class UserAggregator:
 
         # Gap & Trend calculation for each index
         await self._calculate_trend(spots, targets)
+
+        # Multi-timeframe analysis (staggered refresh)
+        await self._refresh_timeframes(targets)
 
         # Build chains + run detectors for target indices
         for idx in targets:
@@ -580,6 +656,8 @@ class UserAggregator:
             "vix_enabled": self.vix_enabled,
             # Trend & Gap data
             "trend_data": self.trend_data,
+            "timeframe_data": self.tf_engine.get_cached(self.active_index),
+            "mtf_analysis": self.mtf_analysis,
         }
 
 

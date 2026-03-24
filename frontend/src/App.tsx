@@ -15,6 +15,7 @@ import DetectorDetail from './components/DetectorDetail'
 import StrikeDetail from './components/StrikeDetail'
 import FlowDashboard from './components/FlowDashboard'
 import AnalyticsDashboard from './components/AnalyticsDashboard'
+import TimeframeDashboard from './components/TimeframeDashboard'
 
 export default function App() {
   const { step, session, error, loading, verifyLicense, setKiteCredentials, logout } = useSession()
@@ -24,7 +25,7 @@ export default function App() {
 
   const [selectedDetector, setSelectedDetector] = useState<DetectorResult | null>(null)
   const [showChain, setShowChain] = useState(false)
-  const [activeTab, setActiveTab] = useState<'main' | 'flow' | 'analytics'>('main')
+  const [activeTab, setActiveTab] = useState<'main' | 'flow' | 'analytics' | 'timeframes'>('main')
 
   // Show spinner during Zerodha callback or any non-credentials loading
   if (step === 'kite_redirect' || (loading && step !== 'kite_credentials' && step !== 'license')) {
@@ -69,6 +70,11 @@ export default function App() {
     return <AnalyticsDashboard state={state} onBack={() => setActiveTab('main')} />
   }
 
+  // Timeframes Dashboard — 4th screen
+  if (activeTab === 'timeframes') {
+    return <TimeframeDashboard state={state} onBack={() => setActiveTab('main')} />
+  }
+
   const flash = state.confluence.score >= 86 ? 'flash-red' : state.confluence.score >= 76 ? 'flash-green' : ''
 
   return (
@@ -87,6 +93,10 @@ export default function App() {
           <button onClick={() => setActiveTab('analytics')}
             className="text-[10px] font-bold text-neon-cyan border border-neon-cyan/30 px-3 py-1 rounded-lg hover:bg-neon-cyan/10 transition-all">
             Analytics →
+          </button>
+          <button onClick={() => setActiveTab('timeframes')}
+            className="text-[10px] font-bold text-neon-yellow border border-neon-yellow/30 px-3 py-1 rounded-lg hover:bg-neon-yellow/10 transition-all">
+            Timeframes →
           </button>
           <button onClick={() => setShowChain(true)}
             className="text-[10px] font-bold text-neon-cyan border border-neon-cyan/30 px-3 py-1 rounded-lg hover:bg-neon-cyan/10 transition-all">
