@@ -13,31 +13,57 @@ function getSide(f: FlowEntry): string {
   return ''
 }
 
-/** Flow Quadrant component */
+/** Flow Quadrant component — clean, no IV, focused on strike + price + volume + OI */
 function FlowQuadrant({ title, subtitle, color, entries }: { title: string; subtitle: string; color: 'green' | 'red'; entries: FlowEntry[] }) {
   const borderClr = color === 'green' ? 'border-green-800/30' : 'border-red-800/30'
   const bgClr = color === 'green' ? 'bg-emerald-950/10' : 'bg-red-950/10'
   const titleClr = color === 'green' ? 'text-green-400' : 'text-red-400'
+  // Aggregate by strike — show unique strikes with total volume
+  const strikeAgg: Record<string, { vol: number; oi: number; price: number; count: number; time: string }> = {}
+  entries.forEach(f => {
+    const st = f.strike
+    if (!strikeAgg[st]) strikeAgg[st] = { vol: 0, oi: 0, price: f.price, count: 0, time: f.time }
+    strikeAgg[st].vol += f.volume
+    strikeAgg[st].oi = Math.max(strikeAgg[st].oi, f.oi)
+    strikeAgg[st].price = f.price
+    strikeAgg[st].count++
+    strikeAgg[st].time = f.time
+  })
+  const sorted = Object.entries(strikeAgg).sort((a, b) => b[1].vol - a[1].vol)
+  const maxVol = sorted[0]?.[1]?.vol || 1
+
   return (
     <div className={`${bgClr} flex flex-col overflow-hidden`}>
-      <div className={`flex items-center justify-between px-2 py-1.5 border-b ${borderClr} shrink-0`}>
+      <div className={`flex items-center justify-between px-3 py-1.5 border-b ${borderClr} shrink-0`}>
         <div className="flex items-center gap-2">
-          <span className={`text-[11px] font-extrabold ${titleClr}`}>{title}</span>
+          <span className={`text-[12px] font-extrabold ${titleClr}`}>{title}</span>
           <span className={`text-[9px] px-1.5 py-0.5 rounded font-bold ${color === 'green' ? 'bg-green-900/40 text-green-400' : 'bg-red-900/40 text-red-400'}`}>{subtitle}</span>
         </div>
-        <span className="text-gray-500 text-[10px] font-mono font-bold">{entries.length}</span>
+        <span className={`text-[11px] font-mono font-extrabold ${titleClr}`}>{sorted.length} strikes</span>
       </div>
-      <div className="flex-1 overflow-y-auto font-mono text-[10px]">
-        {entries.length === 0 && <p className="text-gray-600 text-center py-4 text-[11px]">No activity</p>}
-        {entries.map((f, i) => (
-          <div key={i} className={`flex items-center gap-2 px-2 py-[3px] border-b ${borderClr} hover:bg-white/[0.02]`}>
-            <span className="text-gray-400 w-12">{fmtTime(f.time).slice(0, 5)}</span>
-            <span className="text-white font-bold w-20">{f.strike}</span>
-            <span className="text-white w-14 text-right font-semibold">₹{f.price.toFixed(1)}</span>
-            <span className={`w-16 text-right ${f.volume > 5000 ? 'text-yellow-400 font-bold' : 'text-gray-300'}`}>{f.volume.toLocaleString()}</span>
-            <span className="text-gray-400 w-16 text-right">{f.oi.toLocaleString()}</span>
-            {f.buy_pct !== undefined && <span className={`w-10 text-right text-[9px] ${f.buy_pct > 55 ? 'text-green-400' : f.buy_pct < 45 ? 'text-red-400' : 'text-gray-500'}`}>{f.buy_pct}%</span>}
-            {f.iv !== undefined && f.iv > 0 && <span className="w-10 text-right text-[9px] text-yellow-400">{f.iv.toFixed(0)}IV</span>}
+      {/* Column headers */}
+      <div className="flex items-center px-3 py-1 text-[9px] text-gray-500 font-bold uppercase border-b border-gray-800/50 shrink-0">
+        <span className="w-20">Strike</span>
+        <span className="w-16 text-right">Price</span>
+        <span className="flex-1 text-center">Volume</span>
+        <span className="w-20 text-right">OI</span>
+      </div>
+      <div className="flex-1 overflow-y-auto font-mono">
+        {sorted.length === 0 && <p className="text-gray-600 text-center py-6 text-[12px]">No activity yet</p>}
+        {sorted.map(([strike, data], i) => (
+          <div key={strike} className={`flex items-center px-3 py-1.5 border-b ${borderClr} hover:bg-white/[0.03] ${i === 0 ? 'bg-white/[0.02]' : ''}`}>
+            <span className={`w-20 font-extrabold text-[13px] ${titleClr}`}>{strike}</span>
+            <span className="w-16 text-right text-white font-bold text-[12px]">₹{data.price.toFixed(1)}</span>
+            <div className="flex-1 flex items-center gap-2 px-2">
+              <div className="flex-1 h-3 bg-gray-800/60 rounded-full overflow-hidden">
+                <div className={`h-full rounded-full transition-all ${color === 'green' ? 'bg-green-500/70' : 'bg-red-500/70'}`}
+                  style={{ width: `${Math.min(100, (data.vol / maxVol) * 100)}%` }} />
+              </div>
+              <span className={`text-[11px] font-bold min-w-[60px] text-right ${data.vol > 50000 ? 'text-yellow-400' : 'text-gray-300'}`}>
+                {data.vol > 1e5 ? `${(data.vol / 1e5).toFixed(1)}L` : data.vol.toLocaleString()}
+              </span>
+            </div>
+            <span className="w-20 text-right text-gray-400 text-[11px]">{data.oi > 1e5 ? `${(data.oi / 1e5).toFixed(1)}L` : data.oi.toLocaleString()}</span>
           </div>
         ))}
       </div>
@@ -121,75 +147,69 @@ export default function FlowDashboard({ state, onBack }: Props) {
       </div>
 
       {/* HOT STRIKES + TRADE CONCLUSION — middle insight bar */}
-      <div className="shrink-0 grid grid-cols-2 gap-[1px] bg-tb-border border-b border-tb-border" style={{ maxHeight: '180px' }}>
-        {/* 🔥 HOT STRIKES — where max selling is happening */}
+      <div className="shrink-0 grid grid-cols-2 gap-[1px] bg-tb-border border-b border-tb-border" style={{ maxHeight: '200px' }}>
+        {/* 🔥 HOT STRIKES — clean table layout */}
         <div className="bg-gray-900/80 p-3 overflow-y-auto">
-          <h2 className="text-[11px] font-extrabold text-orange-400 uppercase tracking-widest mb-2">🔥 Hot Strikes — Heaviest Activity</h2>
+          <h2 className="text-[11px] font-extrabold text-orange-400 uppercase tracking-widest mb-2">🔥 Hot Strikes — Heaviest Selling</h2>
           {(() => {
-            // Aggregate flow tape by strike to find heaviest selling
-            const strikeMap: Record<string, { ce_sell: number; pe_sell: number; ce_buy: number; pe_buy: number; total_vol: number; last_price: number }> = {}
+            const strikeMap: Record<string, { ce_sell: number; pe_sell: number; ce_buy: number; pe_buy: number; total_vol: number }> = {}
             allTape.forEach(f => {
               const stNum = f.strike.replace(/\s*(CE|PE)/, '').trim()
               const side = getSide(f)
-              if (!strikeMap[stNum]) strikeMap[stNum] = { ce_sell: 0, pe_sell: 0, ce_buy: 0, pe_buy: 0, total_vol: 0, last_price: 0 }
+              if (!strikeMap[stNum]) strikeMap[stNum] = { ce_sell: 0, pe_sell: 0, ce_buy: 0, pe_buy: 0, total_vol: 0 }
               strikeMap[stNum].total_vol += f.volume
               if (side === 'CE' && f.type === 'SELL') strikeMap[stNum].ce_sell += f.volume
               if (side === 'PE' && f.type === 'SELL') strikeMap[stNum].pe_sell += f.volume
               if (side === 'CE' && f.type === 'BUY') strikeMap[stNum].ce_buy += f.volume
               if (side === 'PE' && f.type === 'BUY') strikeMap[stNum].pe_buy += f.volume
             })
-            // Also use chain_summary for OI data
-            const chain = state.chain_summary || []
-            chain.forEach(r => {
-              const stNum = r.strike.toString()
-              if (!strikeMap[stNum]) strikeMap[stNum] = { ce_sell: 0, pe_sell: 0, ce_buy: 0, pe_buy: 0, total_vol: 0, last_price: 0 }
-            })
-            const sorted = Object.entries(strikeMap)
-              .map(([strike, data]) => ({ strike: Number(strike), ...data, sell_total: data.ce_sell + data.pe_sell }))
-              .sort((a, b) => b.total_vol - a.total_vol)
-              .slice(0, 6)
-            const maxPeSell = Object.entries(strikeMap).sort((a, b) => b[1].pe_sell - a[1].pe_sell).slice(0, 3)
-            const maxCeSell = Object.entries(strikeMap).sort((a, b) => b[1].ce_sell - a[1].ce_sell).slice(0, 3)
+            const maxPeSell = Object.entries(strikeMap).filter(([, d]) => d.pe_sell > 0).sort((a, b) => b[1].pe_sell - a[1].pe_sell).slice(0, 4)
+            const maxCeSell = Object.entries(strikeMap).filter(([, d]) => d.ce_sell > 0).sort((a, b) => b[1].ce_sell - a[1].ce_sell).slice(0, 4)
+            const peMax = maxPeSell[0]?.[1]?.pe_sell || 1
+            const ceMax = maxCeSell[0]?.[1]?.ce_sell || 1
             return (
-              <div className="space-y-2">
-                <div className="grid grid-cols-2 gap-3">
-                  {/* Max PE Selling = Support = Bullish */}
-                  <div>
-                    <p className="text-[10px] text-green-400 font-bold mb-1.5">📈 MAX PUT SELLING <span className="text-gray-500">(Support/Bullish)</span></p>
-                    {maxPeSell.filter(([, d]) => d.pe_sell > 0).length === 0 && <p className="text-gray-600 text-[10px]">No PE selling detected</p>}
-                    {maxPeSell.filter(([, d]) => d.pe_sell > 0).map(([strike, data]) => (
-                      <div key={strike} className="flex items-center gap-2 py-[2px]">
-                        <span className="text-green-400 font-extrabold text-[13px] font-mono w-16">{strike}</span>
-                        <div className="flex-1 h-2 bg-gray-800 rounded-full overflow-hidden">
-                          <div className="h-full bg-green-500 rounded-full" style={{ width: `${Math.min(100, (data.pe_sell / (maxPeSell[0]?.[1]?.pe_sell || 1)) * 100)}%` }} />
-                        </div>
-                        <span className="text-green-400 text-[10px] font-mono font-bold w-16 text-right">{data.pe_sell.toLocaleString()}</span>
-                      </div>
-                    ))}
-                  </div>
-                  {/* Max CE Selling = Resistance = Bearish */}
-                  <div>
-                    <p className="text-[10px] text-red-400 font-bold mb-1.5">📉 MAX CALL SELLING <span className="text-gray-500">(Resistance/Bearish)</span></p>
-                    {maxCeSell.filter(([, d]) => d.ce_sell > 0).length === 0 && <p className="text-gray-600 text-[10px]">No CE selling detected</p>}
-                    {maxCeSell.filter(([, d]) => d.ce_sell > 0).map(([strike, data]) => (
-                      <div key={strike} className="flex items-center gap-2 py-[2px]">
-                        <span className="text-red-400 font-extrabold text-[13px] font-mono w-16">{strike}</span>
-                        <div className="flex-1 h-2 bg-gray-800 rounded-full overflow-hidden">
-                          <div className="h-full bg-red-500 rounded-full" style={{ width: `${Math.min(100, (data.ce_sell / (maxCeSell[0]?.[1]?.ce_sell || 1)) * 100)}%` }} />
-                        </div>
-                        <span className="text-red-400 text-[10px] font-mono font-bold w-16 text-right">{data.ce_sell.toLocaleString()}</span>
-                      </div>
-                    ))}
-                  </div>
+              <div className="grid grid-cols-2 gap-4">
+                {/* PUT SELLING = Support */}
+                <div>
+                  <p className="text-[10px] text-green-400 font-bold mb-2">📈 PUT SELLING <span className="text-gray-500 font-normal">(Support)</span></p>
+                  <table className="w-full text-[11px] font-mono">
+                    <thead><tr className="text-[9px] text-gray-500 uppercase">
+                      <th className="text-left pb-1 w-16">Strike</th>
+                      <th className="text-left pb-1">Bar</th>
+                      <th className="text-right pb-1 w-16">Volume</th>
+                    </tr></thead>
+                    <tbody>
+                      {maxPeSell.length === 0 && <tr><td colSpan={3} className="text-gray-600 py-2">No PE selling</td></tr>}
+                      {maxPeSell.map(([strike, data]) => (
+                        <tr key={strike} className="border-t border-gray-800/30">
+                          <td className="text-green-400 font-extrabold text-[13px] py-1">{strike}</td>
+                          <td className="py-1 px-1"><div className="h-2.5 bg-gray-800 rounded-full overflow-hidden"><div className="h-full bg-green-500/70 rounded-full" style={{ width: `${(data.pe_sell / peMax) * 100}%` }} /></div></td>
+                          <td className="text-green-400 font-bold text-right py-1">{data.pe_sell > 1e5 ? `${(data.pe_sell / 1e5).toFixed(1)}L` : data.pe_sell.toLocaleString()}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
                 </div>
-                {/* Top Active Strikes */}
-                <div className="flex items-center gap-2 flex-wrap">
-                  <span className="text-[9px] text-gray-500 font-bold uppercase">Most Active:</span>
-                  {sorted.slice(0, 5).map(s => (
-                    <span key={s.strike} className={`text-[11px] font-mono font-bold px-2 py-0.5 rounded ${s.strike === atm ? 'bg-cyan-900/40 text-cyan-400 border border-cyan-700/30' : 'bg-gray-800 text-gray-300'}`}>
-                      {s.strike} <span className="text-gray-500">{s.total_vol.toLocaleString()}</span>
-                    </span>
-                  ))}
+                {/* CALL SELLING = Resistance */}
+                <div>
+                  <p className="text-[10px] text-red-400 font-bold mb-2">📉 CALL SELLING <span className="text-gray-500 font-normal">(Resistance)</span></p>
+                  <table className="w-full text-[11px] font-mono">
+                    <thead><tr className="text-[9px] text-gray-500 uppercase">
+                      <th className="text-left pb-1 w-16">Strike</th>
+                      <th className="text-left pb-1">Bar</th>
+                      <th className="text-right pb-1 w-16">Volume</th>
+                    </tr></thead>
+                    <tbody>
+                      {maxCeSell.length === 0 && <tr><td colSpan={3} className="text-gray-600 py-2">No CE selling</td></tr>}
+                      {maxCeSell.map(([strike, data]) => (
+                        <tr key={strike} className="border-t border-gray-800/30">
+                          <td className="text-red-400 font-extrabold text-[13px] py-1">{strike}</td>
+                          <td className="py-1 px-1"><div className="h-2.5 bg-gray-800 rounded-full overflow-hidden"><div className="h-full bg-red-500/70 rounded-full" style={{ width: `${(data.ce_sell / ceMax) * 100}%` }} /></div></td>
+                          <td className="text-red-400 font-bold text-right py-1">{data.ce_sell > 1e5 ? `${(data.ce_sell / 1e5).toFixed(1)}L` : data.ce_sell.toLocaleString()}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
                 </div>
               </div>
             )
