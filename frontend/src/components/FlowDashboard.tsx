@@ -216,9 +216,9 @@ export default function FlowDashboard({ state, onBack }: Props) {
           })()}
         </div>
 
-        {/* 💡 TRADE CONCLUSION — simple setup for normal person */}
+        {/* 💡 TRADE CONCLUSION + ZONE ANALYSIS */}
         <div className="bg-gray-900/80 p-3 overflow-y-auto">
-          <h2 className="text-[11px] font-extrabold text-yellow-400 uppercase tracking-widest mb-2">💡 Trade Conclusion — What To Do</h2>
+          <h2 className="text-[11px] font-extrabold text-yellow-400 uppercase tracking-widest mb-2">💡 Trade Conclusion + Zone Map</h2>
           {(() => {
             const dir = confluence.direction
             const score = confluence.score
@@ -226,44 +226,24 @@ export default function FlowDashboard({ state, onBack }: Props) {
             const bear = dir === 'BEARISH'
             const primary = brain.primary
             const strength = brain.strength || (score >= 80 ? 'EXTREME' : score >= 60 ? 'STRONG' : score >= 40 ? 'MILD' : 'WEAK')
-            // Find support/resistance from chain
-            const chain = state.chain_summary || []
-            const maxPeOI = chain.reduce((max, r) => r.pe_oi > (max?.pe_oi || 0) ? r : max, chain[0])
-            const maxCeOI = chain.reduce((max, r) => r.ce_oi > (max?.ce_oi || 0) ? r : max, chain[0])
-            const support = maxPeOI?.strike || atm - 100
-            const resistance = maxCeOI?.strike || atm + 100
-
-            if (score < 30) {
-              return (
-                <div className="space-y-2">
-                  <div className="rounded-xl bg-gray-800/50 border border-gray-700 p-3 text-center">
-                    <p className="text-gray-400 text-sm font-bold mb-1">⏸ NO CLEAR TRADE</p>
-                    <p className="text-gray-500 text-[11px]">Confluence score {score.toFixed(0)}/100 — too low for a high-probability setup</p>
-                    <p className="text-yellow-500 text-[11px] mt-2 font-semibold">Wait for score above 50+ before entering</p>
-                  </div>
-                  <div className="grid grid-cols-2 gap-2 text-[11px] font-mono">
-                    <div className="bg-gray-800/30 rounded-lg p-2">
-                      <span className="text-gray-500 text-[9px] block">SUPPORT</span>
-                      <span className="text-green-400 font-bold text-sm">{support}</span>
-                      <span className="text-gray-600 text-[9px] block">Max PE OI</span>
-                    </div>
-                    <div className="bg-gray-800/30 rounded-lg p-2">
-                      <span className="text-gray-500 text-[9px] block">RESISTANCE</span>
-                      <span className="text-red-400 font-bold text-sm">{resistance}</span>
-                      <span className="text-gray-600 text-[9px] block">Max CE OI</span>
-                    </div>
-                  </div>
-                </div>
-              )
-            }
+            const za = (state as any).zone_analysis || {}
+            const support = za.support_zone || atm - 100
+            const resistance = za.resistance_zone || atm + 100
+            const winner = za.winner || 'NEUTRAL'
+            const reversal = za.reversal_zone || atm
+            const traps = za.trap_zones || []
+            const buyersScore = za.buyers_score || 0
+            const sellersScore = za.sellers_score || 0
+            const totalScore = buyersScore + sellersScore || 1
+            const buyersPct = Math.round((buyersScore / totalScore) * 100)
 
             return (
               <div className="space-y-2">
-                {/* Main trade box */}
-                <div className={`rounded-xl border p-3 ${bull ? 'border-green-600/50 bg-emerald-950/30' : bear ? 'border-red-600/50 bg-red-950/30' : 'border-gray-600 bg-gray-800/30'}`}>
-                  <div className="flex items-center justify-between mb-2">
+                {/* Trade signal */}
+                <div className={`rounded-xl border p-2.5 ${bull ? 'border-green-600/50 bg-emerald-950/30' : bear ? 'border-red-600/50 bg-red-950/30' : 'border-gray-600 bg-gray-800/30'}`}>
+                  <div className="flex items-center justify-between mb-1.5">
                     <div className="flex items-center gap-2">
-                      <span className={`text-xl font-black ${bull ? 'text-green-400' : bear ? 'text-red-400' : 'text-gray-300'}`}>
+                      <span className={`text-lg font-black ${bull ? 'text-green-400' : bear ? 'text-red-400' : 'text-gray-300'}`}>
                         {bull ? '🟢 BUY CALL' : bear ? '🔴 BUY PUT' : '⚪ WAIT'}
                       </span>
                       <span className={`text-[10px] px-2 py-0.5 rounded font-extrabold ${STR_CLR[strength] || 'bg-gray-700 text-gray-400'}`}>{strength}</span>
@@ -271,57 +251,71 @@ export default function FlowDashboard({ state, onBack }: Props) {
                     <span className={`text-lg font-black font-mono ${bull ? 'text-green-400' : bear ? 'text-red-400' : 'text-gray-400'}`}>{score.toFixed(0)}%</span>
                   </div>
                   {primary ? (
-                    <div className="grid grid-cols-5 gap-1 text-center">
-                      <div className="bg-black/20 rounded-lg p-2">
-                        <span className="text-gray-400 text-[9px] block font-bold">STRIKE</span>
-                        <span className="text-white font-extrabold text-[14px]">{primary.strike}</span>
-                      </div>
-                      <div className="bg-black/20 rounded-lg p-2">
-                        <span className="text-gray-400 text-[9px] block font-bold">ENTRY</span>
-                        <span className="text-cyan-400 font-extrabold text-[14px]">{primary.cmp}</span>
-                      </div>
-                      <div className="bg-black/20 rounded-lg p-2">
-                        <span className="text-gray-400 text-[9px] block font-bold">TARGET</span>
-                        <span className="text-green-400 font-extrabold text-[14px]">{primary.target1}</span>
-                      </div>
-                      <div className="bg-black/20 rounded-lg p-2">
-                        <span className="text-gray-400 text-[9px] block font-bold">STOP LOSS</span>
-                        <span className="text-red-400 font-extrabold text-[14px]">{primary.stop_loss}</span>
-                      </div>
-                      <div className="bg-black/20 rounded-lg p-2">
-                        <span className="text-gray-400 text-[9px] block font-bold">TIME</span>
-                        <span className="text-yellow-400 font-bold text-[11px]">{primary.time_limit}</span>
-                      </div>
+                    <div className="grid grid-cols-5 gap-1 text-center text-[11px]">
+                      {[
+                        { label: 'STRIKE', val: primary.strike, clr: 'text-white' },
+                        { label: 'ENTRY', val: primary.cmp, clr: 'text-cyan-400' },
+                        { label: 'TARGET', val: primary.target1, clr: 'text-green-400' },
+                        { label: 'SL', val: primary.stop_loss, clr: 'text-red-400' },
+                        { label: 'TIME', val: primary.time_limit, clr: 'text-yellow-400' },
+                      ].map(x => (
+                        <div key={x.label} className="bg-black/20 rounded-lg p-1.5">
+                          <span className="text-gray-500 text-[8px] block font-bold">{x.label}</span>
+                          <span className={`${x.clr} font-extrabold text-[13px]`}>{x.val}</span>
+                        </div>
+                      ))}
                     </div>
                   ) : (
-                    <p className="text-gray-400 text-[11px] font-mono">Signal building... {dir} bias detected at {score.toFixed(0)}%</p>
+                    <p className="text-gray-400 text-[11px] font-mono">Signal building... {dir} bias at {score.toFixed(0)}%</p>
                   )}
                 </div>
-                {/* Support/Resistance + Why */}
-                <div className="grid grid-cols-3 gap-2 text-[11px] font-mono">
-                  <div className="bg-green-950/20 border border-green-800/30 rounded-lg p-2">
-                    <span className="text-gray-400 text-[9px] block font-bold">SUPPORT</span>
-                    <span className="text-green-400 font-extrabold text-sm">{support}</span>
-                    <span className="text-gray-600 text-[9px] block">Max PE OI</span>
+
+                {/* Zone Map — 2x3 grid */}
+                <div className="grid grid-cols-3 gap-1.5 text-[11px] font-mono">
+                  <div className="bg-green-950/20 border border-green-800/30 rounded-lg p-1.5 text-center">
+                    <span className="text-gray-500 text-[8px] block font-bold">SUPPORT</span>
+                    <span className="text-green-400 font-extrabold text-[15px]">{support}</span>
+                    <span className="text-green-600 text-[8px] block">PE Sellers Here</span>
                   </div>
-                  <div className="bg-red-950/20 border border-red-800/30 rounded-lg p-2">
-                    <span className="text-gray-400 text-[9px] block font-bold">RESISTANCE</span>
-                    <span className="text-red-400 font-extrabold text-sm">{resistance}</span>
-                    <span className="text-gray-600 text-[9px] block">Max CE OI</span>
+                  <div className="bg-red-950/20 border border-red-800/30 rounded-lg p-1.5 text-center">
+                    <span className="text-gray-500 text-[8px] block font-bold">RESISTANCE</span>
+                    <span className="text-red-400 font-extrabold text-[15px]">{resistance}</span>
+                    <span className="text-red-600 text-[8px] block">CE Sellers Here</span>
                   </div>
-                  <div className="bg-gray-800/30 border border-gray-700/30 rounded-lg p-2">
-                    <span className="text-gray-400 text-[9px] block font-bold">RANGE</span>
-                    <span className="text-cyan-400 font-extrabold text-sm">{support}—{resistance}</span>
-                    <span className="text-gray-600 text-[9px] block">OI-based range</span>
+                  <div className="bg-purple-950/20 border border-purple-800/30 rounded-lg p-1.5 text-center">
+                    <span className="text-gray-500 text-[8px] block font-bold">REVERSAL</span>
+                    <span className="text-purple-400 font-extrabold text-[15px]">{reversal}</span>
+                    <span className="text-purple-600 text-[8px] block">Max OI Both Sides</span>
                   </div>
                 </div>
-                {/* Quick reason */}
-                <div className="text-[10px] text-gray-300 bg-gray-800/20 rounded-lg p-2 border border-gray-700/30 space-y-0.5">
-                  <p className="text-gray-500 font-bold uppercase text-[9px]">Why this trade?</p>
-                  {confluence.firing?.slice(0, 4).map((f, i) => (
-                    <p key={i} className="text-gray-300">• <span className={`font-bold ${f.status === 'CRITICAL' ? 'text-green-400' : f.status === 'ALERT' ? 'text-yellow-400' : 'text-gray-400'}`}>{f.name}</span>: {f.metric}</p>
-                  ))}
+
+                {/* Buyers vs Sellers bar */}
+                <div className="bg-gray-800/30 border border-gray-700/30 rounded-lg p-2">
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="text-green-400 text-[10px] font-bold">BUYERS {buyersPct}%</span>
+                    <span className={`text-[11px] font-extrabold px-2 py-0.5 rounded ${winner === 'BUYERS' ? 'bg-green-900/50 text-green-400' : 'bg-red-900/50 text-red-400'}`}>
+                      {winner} WINNING
+                    </span>
+                    <span className="text-red-400 text-[10px] font-bold">SELLERS {100 - buyersPct}%</span>
+                  </div>
+                  <div className="h-3 bg-gray-700 rounded-full overflow-hidden flex">
+                    <div className="bg-green-500/70 h-full transition-all" style={{ width: `${buyersPct}%` }} />
+                    <div className="bg-red-500/70 h-full transition-all" style={{ width: `${100 - buyersPct}%` }} />
+                  </div>
                 </div>
+
+                {/* Trap zones */}
+                {traps.length > 0 && (
+                  <div className="bg-yellow-950/15 border border-yellow-800/30 rounded-lg p-2">
+                    <span className="text-yellow-400 text-[10px] font-extrabold">⚠️ TRAP ZONES</span>
+                    <span className="text-gray-400 text-[9px] ml-2">(Both sides building OI — potential trap)</span>
+                    <div className="flex gap-2 mt-1">
+                      {traps.map((t: any, i: number) => (
+                        <span key={i} className="text-yellow-400 text-[12px] font-bold bg-yellow-900/30 px-2 py-0.5 rounded">{t.strike}</span>
+                      ))}
+                    </div>
+                  </div>
+                )}
               </div>
             )
           })()}

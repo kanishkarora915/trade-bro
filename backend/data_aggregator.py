@@ -627,6 +627,105 @@ class UserAggregator:
         self.flow_tape = self.flow_tape[-100:]
         return self.get_state()
 
+    def _analyze_zones(self) -> dict:
+        """Analyze chain OI data to find trading zones — reversal, buying, selling, trap."""
+        active = self.indices[self.active_index]
+        chain = active.chain
+        spot = active.spot
+        if not chain or spot <= 0:
+            return {}
+
+        strikes = sorted(chain.keys())
+        # Collect OI data per strike
+        pe_selling = []  # high PE OI = support (writers believe market won't fall)
+        ce_selling = []  # high CE OI = resistance (writers believe market won't rise)
+        pe_buying = []   # high PE OI change + price up = fear buying
+        ce_buying = []   # high CE OI change + price up = bullish buying
+
+        for s in strikes:
+            ce = chain[s].get("CE") or {}
+            pe = chain[s].get("PE") or {}
+            ce_oi = ce.get("oi", 0)
+            pe_oi = pe.get("oi", 0)
+            ce_oi_chg = ce.get("oi_day_change", 0)
+            pe_oi_chg = pe.get("oi_day_change", 0)
+            ce_nc = ce.get("net_change", 0)
+            pe_nc = pe.get("net_change", 0)
+
+            # PE selling = OI building + price falling → support zone
+            if pe_oi_chg > 0 and pe_nc <= 0 and pe_oi > 0:
+                pe_selling.append({"strike": s, "oi": pe_oi, "oi_chg": pe_oi_chg, "price": pe.get("last_price", 0)})
+            # CE selling = OI building + price falling → resistance zone
+            if ce_oi_chg > 0 and ce_nc <= 0 and ce_oi > 0:
+                ce_selling.append({"strike": s, "oi": ce_oi, "oi_chg": ce_oi_chg, "price": ce.get("last_price", 0)})
+            # PE buying = OI building + price rising → bearish fear
+            if pe_oi_chg > 0 and pe_nc > 0:
+                pe_buying.append({"strike": s, "oi": pe_oi, "oi_chg": pe_oi_chg, "price": pe.get("last_price", 0)})
+            # CE buying = OI building + price rising → bullish conviction
+            if ce_oi_chg > 0 and ce_nc > 0:
+                ce_buying.append({"strike": s, "oi": ce_oi, "oi_chg": ce_oi_chg, "price": ce.get("last_price", 0)})
+
+        # Sort by OI (highest first)
+        pe_selling.sort(key=lambda x: x["oi"], reverse=True)
+        ce_selling.sort(key=lambda x: x["oi"], reverse=True)
+        pe_buying.sort(key=lambda x: x["oi_chg"], reverse=True)
+        ce_buying.sort(key=lambda x: x["oi_chg"], reverse=True)
+
+        # Identify zones
+        support_zone = pe_selling[0]["strike"] if pe_selling else 0
+        resistance_zone = ce_selling[0]["strike"] if ce_selling else 0
+
+        # Trap detection: if OI is building heavily at a strike near spot but price isn't moving
+        trap_zones = []
+        for s in strikes:
+            ce = chain[s].get("CE") or {}
+            pe = chain[s].get("PE") or {}
+            ce_oi_chg = ce.get("oi_day_change", 0)
+            pe_oi_chg = pe.get("oi_day_change", 0)
+            # Both sides building OI near ATM = potential trap
+            if abs(s - spot) <= active.cfg["strike_step"] * 3:
+                if ce_oi_chg > 0 and pe_oi_chg > 0:
+                    trap_zones.append({"strike": s, "ce_oi_chg": ce_oi_chg, "pe_oi_chg": pe_oi_chg})
+
+        # Buyers vs Sellers winner
+        total_ce_oi_chg = sum(ce.get("oi_day_change", 0) for s in strikes for ce in [chain[s].get("CE") or {}])
+        total_pe_oi_chg = sum(pe.get("oi_day_change", 0) for s in strikes for pe in [chain[s].get("PE") or {}])
+        total_ce_selling = sum(x["oi_chg"] for x in ce_selling)
+        total_pe_selling = sum(x["oi_chg"] for x in pe_selling)
+        total_ce_buying = sum(x["oi_chg"] for x in ce_buying)
+        total_pe_buying = sum(x["oi_chg"] for x in pe_buying)
+
+        # Reversal zone: where max pain is + where OI is highest on both sides
+        reversal_strike = 0
+        max_combined = 0
+        for s in strikes:
+            ce = chain[s].get("CE") or {}
+            pe = chain[s].get("PE") or {}
+            combined = ce.get("oi", 0) + pe.get("oi", 0)
+            if combined > max_combined:
+                max_combined = combined
+                reversal_strike = s
+
+        buyers_winning = total_pe_selling > total_ce_selling  # more PE selling = bullish = buyers winning
+        winner = "BUYERS" if buyers_winning else "SELLERS"
+
+        return {
+            "support_zone": support_zone,
+            "resistance_zone": resistance_zone,
+            "reversal_zone": reversal_strike,
+            "range": f"{int(support_zone)}–{int(resistance_zone)}" if support_zone and resistance_zone else "",
+            "trap_zones": trap_zones[:3],
+            "pe_selling": pe_selling[:5],
+            "ce_selling": ce_selling[:5],
+            "pe_buying": pe_buying[:5],
+            "ce_buying": ce_buying[:5],
+            "winner": winner,
+            "buyers_score": total_pe_selling + total_ce_buying,
+            "sellers_score": total_ce_selling + total_pe_buying,
+            "total_ce_oi_chg": total_ce_oi_chg,
+            "total_pe_oi_chg": total_pe_oi_chg,
+        }
+
     def get_state(self) -> dict:
         active_state = self.indices[self.active_index]
         return {
@@ -658,6 +757,8 @@ class UserAggregator:
             "trend_data": self.trend_data,
             "timeframe_data": self.tf_engine.get_cached(self.active_index),
             "mtf_analysis": self.mtf_analysis,
+            # Zone analysis
+            "zone_analysis": self._analyze_zones(),
         }
 
 
