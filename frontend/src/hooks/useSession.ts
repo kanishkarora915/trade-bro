@@ -42,9 +42,9 @@ export function useSession() {
     if (token && status === 'success') {
       // Clean URL immediately
       window.history.replaceState({}, '', window.location.pathname)
-      // Show loading state — switch to 'kite_redirect' so spinner shows
-      setStep('kite_redirect')
-      setLoading(true)
+      // Go directly to authenticated — no spinner, no blank screen
+      setStep('authenticated')
+      setLoading(false)
       const sess = loadSession()
       if (sess) {
         fetch(`${API}/api/kite/callback`, {

@@ -27,83 +27,62 @@ export default function App() {
   const [showChain, setShowChain] = useState(false)
   const [activeTab, setActiveTab] = useState<'main' | 'flow' | 'analytics' | 'timeframes'>('main')
 
-  // Show spinner during Zerodha callback or any non-credentials loading
-  if (step === 'kite_redirect' || (loading && step !== 'kite_credentials' && step !== 'license')) {
-    return (
-      <div className="min-h-screen bg-tb-bg flex items-center justify-center">
-        <div className="text-center animate-slide-up">
-          <div className="w-10 h-10 border-3 border-neon-cyan/30 border-t-neon-cyan rounded-full animate-spin mx-auto mb-4" />
-          <p className="text-tb-muted text-sm">Authenticating with Zerodha...</p>
-          <p className="text-tb-muted/40 text-[10px] mt-2">Exchanging token with Kite API</p>
-        </div>
-      </div>
-    )
-  }
+  // Zerodha callback — NO spinner, just process silently in background
+  // useSession handles the token exchange automatically
 
   if (step === 'license') return <LicensePage onVerify={verifyLicense} error={error} loading={loading} />
   if (step === 'kite_credentials') return <KiteLoginPage userName={session?.user_name || ''} error={error} loading={loading} onSetCredentials={setKiteCredentials} onLogout={logout} />
 
-  // Authenticated but waiting for first data from WebSocket
-  if (step === 'authenticated' && !connected && state.spot === 0) {
-    return (
-      <div className="min-h-screen bg-tb-bg flex items-center justify-center">
-        <div className="text-center animate-slide-up">
-          <div className="w-10 h-10 border-3 border-neon-cyan/30 border-t-neon-cyan rounded-full animate-spin mx-auto mb-4" />
-          <p className="text-neon-cyan text-sm font-semibold">Authenticated! Connecting to TRADE BRO...</p>
-          <p className="text-tb-muted/50 text-[10px] mt-2">Loading option chain from Kite API (first load ~10s)</p>
-          <button onClick={() => { localStorage.clear(); window.location.reload() }}
-            className="mt-6 text-[10px] text-tb-muted hover:text-neon-red border border-tb-border px-3 py-1.5 rounded transition-all">
-            Stuck? Click to re-login
-          </button>
-        </div>
-      </div>
-    )
-  }
-
-  // Flow Dashboard — 2nd screen
-  if (activeTab === 'flow') {
-    return <FlowDashboard state={state} onBack={() => setActiveTab('main')} />
-  }
-
-  // Analytics Dashboard — 3rd screen
-  if (activeTab === 'analytics') {
-    return <AnalyticsDashboard state={state} onBack={() => setActiveTab('main')} />
-  }
-
-  // Timeframes Dashboard — 4th screen
-  if (activeTab === 'timeframes') {
-    return <TimeframeDashboard state={state} onBack={() => setActiveTab('main')} />
-  }
-
+  // Authenticated but waiting for first data — show dashboard skeleton immediately, no blank screen
   const flash = state.confluence.score >= 86 ? 'flash-red' : state.confluence.score >= 76 ? 'flash-green' : ''
+
+  // Tab config
+  const TABS = [
+    { id: 'main' as const, label: 'Dashboard', color: 'text-white', bg: 'bg-white/10' },
+    { id: 'flow' as const, label: 'Flow', color: 'text-neon-purple', bg: 'bg-neon-purple/10' },
+    { id: 'analytics' as const, label: 'Analytics', color: 'text-neon-cyan', bg: 'bg-neon-cyan/10' },
+    { id: 'timeframes' as const, label: 'Timeframes', color: 'text-neon-yellow', bg: 'bg-neon-yellow/10' },
+  ]
 
   return (
     <div className={`h-screen flex flex-col bg-tb-bg overflow-hidden ${flash}`}>
-      {/* Top bar */}
+      {/* PERSISTENT TOP BAR — always visible on ALL tabs */}
       <TopBar spot={state.spot} atm={state.atm} connected={connected} latency={latency} userName={session?.user_name || ''} onLogout={logout} indiaVix={state.india_vix} vixEnabled={state.vix_enabled} onToggleVix={toggleVix} />
 
-      {/* Index tabs + Chain button */}
-      <div className="shrink-0 flex items-center justify-between px-4 py-1.5 bg-tb-card/30 border-b border-tb-border">
-        <IndexTabs active={state.active_index || 'NIFTY'} spots={state.spots || {}} onSwitch={switchIndex} />
-        <div className="flex items-center gap-2">
-          <button onClick={() => setActiveTab('flow')}
-            className="text-[10px] font-bold text-neon-purple border border-neon-purple/30 px-3 py-1 rounded-lg hover:bg-neon-purple/10 transition-all">
-            Flow Dashboard →
-          </button>
-          <button onClick={() => setActiveTab('analytics')}
-            className="text-[10px] font-bold text-neon-cyan border border-neon-cyan/30 px-3 py-1 rounded-lg hover:bg-neon-cyan/10 transition-all">
-            Analytics →
-          </button>
-          <button onClick={() => setActiveTab('timeframes')}
-            className="text-[10px] font-bold text-neon-yellow border border-neon-yellow/30 px-3 py-1 rounded-lg hover:bg-neon-yellow/10 transition-all">
-            Timeframes →
-          </button>
-          <button onClick={() => setShowChain(true)}
-            className="text-[10px] font-bold text-neon-cyan border border-neon-cyan/30 px-3 py-1 rounded-lg hover:bg-neon-cyan/10 transition-all">
-            Full Chain View
-          </button>
+      {/* PERSISTENT TAB NAV — click to switch, no back button needed */}
+      <div className="shrink-0 flex items-center justify-between px-3 py-1 bg-tb-card/30 border-b border-tb-border">
+        <div className="flex items-center gap-0.5">
+          {/* Index tabs (NIFTY / BANKNIFTY / SENSEX) */}
+          <IndexTabs active={state.active_index || 'NIFTY'} spots={state.spots || {}} onSwitch={switchIndex} />
+          <span className="text-gray-700 mx-2">|</span>
+          {/* Dashboard tabs */}
+          {TABS.map(t => (
+            <button key={t.id} onClick={() => setActiveTab(t.id)}
+              className={`text-[10px] font-bold px-3 py-1.5 rounded-lg transition-all ${
+                activeTab === t.id
+                  ? `${t.bg} ${t.color} border border-current`
+                  : 'text-gray-500 hover:text-gray-300 border border-transparent'
+              }`}>
+              {t.label}
+            </button>
+          ))}
         </div>
+        <button onClick={() => setShowChain(true)}
+          className="text-[10px] font-bold text-neon-cyan border border-neon-cyan/30 px-3 py-1 rounded-lg hover:bg-neon-cyan/10 transition-all">
+          Full Chain View
+        </button>
       </div>
+
+      {/* TAB CONTENT */}
+      {activeTab === 'flow' ? (
+        <FlowDashboard state={state} onBack={() => setActiveTab('main')} />
+      ) : activeTab === 'analytics' ? (
+        <AnalyticsDashboard state={state} onBack={() => setActiveTab('main')} />
+      ) : activeTab === 'timeframes' ? (
+        <TimeframeDashboard state={state} onBack={() => setActiveTab('main')} />
+      ) : (
+      <>
+      {/* MAIN DASHBOARD CONTENT */}
 
       {/* GAP & TREND BAR */}
       {(() => {
@@ -212,13 +191,15 @@ export default function App() {
           <AlertLog alerts={state.alert_log} />
         </div>
       </div>
+      </>
+      )}
 
-      {/* Detector Detail Modal */}
+      {/* Detector Detail Modal — works on all tabs */}
       {selectedDetector && (
         <DetectorDetail detector={selectedDetector} onClose={() => setSelectedDetector(null)} />
       )}
 
-      {/* Full Chain Modal */}
+      {/* Full Chain Modal — works on all tabs */}
       {showChain && (
         <StrikeDetail chain={state.chain_summary || []} atm={state.atm} onClose={() => setShowChain(false)} />
       )}
