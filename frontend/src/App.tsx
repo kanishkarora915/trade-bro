@@ -85,6 +85,56 @@ export default function App() {
         </div>
       </div>
 
+      {/* GAP & TREND BAR */}
+      {(() => {
+        const td = (state as any).trend_data?.[state.active_index || 'NIFTY']
+        if (!td || !td.prev_close) return null
+        const gapClr = td.gap_pct > 0.15 ? 'text-green-400' : td.gap_pct < -0.15 ? 'text-red-400' : 'text-gray-400'
+        const trendClr = td.trend?.includes('UP') ? 'text-green-400' : td.trend?.includes('DOWN') ? 'text-red-400' : 'text-yellow-400'
+        const dayClr = td.day_chg >= 0 ? 'text-green-400' : 'text-red-400'
+        return (
+          <div className="shrink-0 flex items-center gap-4 px-4 py-1 bg-gray-900/50 border-b border-tb-border text-[10px] font-mono overflow-x-auto">
+            {/* Gap */}
+            <div className="flex items-center gap-1.5">
+              <span className={`font-extrabold text-[11px] px-1.5 py-0.5 rounded ${td.gap_pct > 0.15 ? 'bg-green-900/40' : td.gap_pct < -0.15 ? 'bg-red-900/40' : 'bg-gray-800'} ${gapClr}`}>
+                {td.gap_type}
+              </span>
+              <span className={`font-bold ${gapClr}`}>{td.gap >= 0 ? '+' : ''}{td.gap.toFixed(1)} ({td.gap_pct >= 0 ? '+' : ''}{td.gap_pct.toFixed(2)}%)</span>
+              {td.gap_filled && <span className="text-yellow-400 font-bold px-1 bg-yellow-900/30 rounded">GAP FILLED</span>}
+            </div>
+            <span className="text-gray-700">|</span>
+            {/* Trend */}
+            <div className="flex items-center gap-1.5">
+              <span className={`font-extrabold ${trendClr}`}>
+                {td.trend === 'TRENDING UP' ? '📈' : td.trend === 'TRENDING DOWN' ? '📉' : '➡️'} {td.trend}
+              </span>
+              {td.trend_strength > 0 && <span className="text-gray-500">({td.trend_strength.toFixed(0)}%)</span>}
+            </div>
+            <span className="text-gray-700">|</span>
+            {/* Day Change */}
+            <span className="text-gray-500">Day:</span>
+            <span className={`font-bold ${dayClr}`}>{td.day_chg >= 0 ? '+' : ''}{td.day_chg.toFixed(1)} ({td.day_chg_pct >= 0 ? '+' : ''}{td.day_chg_pct.toFixed(2)}%)</span>
+            <span className="text-gray-700">|</span>
+            {/* OHLC */}
+            <span className="text-gray-500">O:</span><span className="text-gray-300">{td.today_open?.toLocaleString('en-IN')}</span>
+            <span className="text-gray-500">H:</span><span className="text-green-400 font-bold">{td.today_high?.toLocaleString('en-IN')}</span>
+            <span className="text-gray-500">L:</span><span className="text-red-400 font-bold">{td.today_low?.toLocaleString('en-IN')}</span>
+            <span className="text-gray-500">PC:</span><span className="text-gray-300">{td.prev_close?.toLocaleString('en-IN')}</span>
+            <span className="text-gray-700">|</span>
+            {/* Range */}
+            <span className="text-gray-500">Range:</span><span className="text-cyan-400 font-bold">{td.day_range?.toFixed(1)} pts</span>
+            {/* 5m Momentum */}
+            {td.momentum_5m !== 0 && (
+              <>
+                <span className="text-gray-700">|</span>
+                <span className="text-gray-500">5m:</span>
+                <span className={`font-bold ${td.momentum_5m >= 0 ? 'text-green-400' : 'text-red-400'}`}>{td.momentum_5m >= 0 ? '+' : ''}{td.momentum_5m.toFixed(3)}%</span>
+              </>
+            )}
+          </div>
+        )
+      })()}
+
       {/* Market status / Error banner */}
       {(() => {
         const now = new Date()

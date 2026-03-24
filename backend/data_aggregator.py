@@ -98,7 +98,10 @@ class UserAggregator:
         self.fii_dii: dict = {}
         self.india_vix: float = 0.0
         self.vix_enabled: bool = True  # VIX integration toggle
-        self.skew_history: dict[str, list[dict]] = {k: [] for k in INDICES}  # per-index IV skew history
+        self.skew_history: dict[str, list[dict]] = {k: [] for k in INDICES}
+        # Gap & Trend tracking
+        self.trend_data: dict[str, dict] = {}  # per-index trend info
+        self._spot_history: dict[str, list[tuple[float, float]]] = {k: [] for k in INDICES}  # (timestamp, price)
         self._prev_scores: dict[str, float] = {}
         self._cache: dict[str, tuple[float, dict]] = {}
         self._spot_cache: dict[str, tuple[float, float]] = {}
@@ -183,6 +186,102 @@ class UserAggregator:
 
         self._fii_dii_task = asyncio.create_task(_fetch())
 
+    async def _calculate_trend(self, spots: dict, targets: list):
+        """Calculate gap up/down + intraday trend for each index."""
+        now = time.time()
+        for idx in INDICES:
+            spot = spots.get(idx, 0)
+            if spot <= 0:
+                continue
+
+            # Track spot history (keep last 60 data points ~30 min at 30s intervals)
+            self._spot_history[idx].append((now, spot))
+            self._spot_history[idx] = self._spot_history[idx][-60:]
+
+            # Get OHLC data from Kite (previous close, today's open/high/low)
+            if idx not in self.trend_data or now - self.trend_data[idx].get("_ts", 0) > 120:
+                try:
+                    sym = INDICES[idx]["symbol"]
+                    quote = await self.kite.get_quote([sym])
+                    q = quote.get(sym, {})
+                    ohlc = q.get("ohlc", {})
+                    prev_close = ohlc.get("close", 0)
+                    today_open = ohlc.get("open", 0)
+                    today_high = ohlc.get("high", 0)
+                    today_low = ohlc.get("low", 0)
+
+                    gap = today_open - prev_close if prev_close > 0 else 0
+                    gap_pct = (gap / prev_close * 100) if prev_close > 0 else 0
+                    gap_type = "GAP UP" if gap_pct > 0.15 else "GAP DOWN" if gap_pct < -0.15 else "FLAT OPEN"
+
+                    # Change from open
+                    chg_from_open = spot - today_open if today_open > 0 else 0
+                    chg_from_open_pct = (chg_from_open / today_open * 100) if today_open > 0 else 0
+
+                    # Change from prev close
+                    day_chg = spot - prev_close if prev_close > 0 else 0
+                    day_chg_pct = (day_chg / prev_close * 100) if prev_close > 0 else 0
+
+                    # Intraday range
+                    day_range = today_high - today_low if today_high > 0 else 0
+
+                    # Gap fill check
+                    gap_filled = False
+                    if gap > 0 and today_low <= prev_close:
+                        gap_filled = True
+                    elif gap < 0 and today_high >= prev_close:
+                        gap_filled = True
+
+                    # Trend from spot history (last 10 points = ~5 min)
+                    history = self._spot_history[idx]
+                    trend_dir = "SIDEWAYS"
+                    trend_strength = 0
+                    if len(history) >= 5:
+                        recent = [p for _, p in history[-10:]]
+                        first_half = sum(recent[:len(recent)//2]) / max(1, len(recent)//2)
+                        second_half = sum(recent[len(recent)//2:]) / max(1, len(recent) - len(recent)//2)
+                        diff = second_half - first_half
+                        diff_pct = (diff / first_half * 100) if first_half > 0 else 0
+                        if diff_pct > 0.05:
+                            trend_dir = "TRENDING UP"
+                            trend_strength = min(100, abs(diff_pct) * 30)
+                        elif diff_pct < -0.05:
+                            trend_dir = "TRENDING DOWN"
+                            trend_strength = min(100, abs(diff_pct) * 30)
+                        else:
+                            trend_dir = "SIDEWAYS"
+                            trend_strength = 0
+
+                    # 5-min momentum
+                    momentum_5m = 0
+                    if len(history) >= 10:
+                        old_price = history[-10][1]
+                        momentum_5m = ((spot - old_price) / old_price * 100) if old_price > 0 else 0
+
+                    self.trend_data[idx] = {
+                        "prev_close": prev_close,
+                        "today_open": today_open,
+                        "today_high": today_high,
+                        "today_low": today_low,
+                        "gap": round(gap, 2),
+                        "gap_pct": round(gap_pct, 2),
+                        "gap_type": gap_type,
+                        "gap_filled": gap_filled,
+                        "day_chg": round(day_chg, 2),
+                        "day_chg_pct": round(day_chg_pct, 2),
+                        "chg_from_open": round(chg_from_open, 2),
+                        "chg_from_open_pct": round(chg_from_open_pct, 2),
+                        "day_range": round(day_range, 2),
+                        "trend": trend_dir,
+                        "trend_strength": round(trend_strength, 1),
+                        "momentum_5m": round(momentum_5m, 3),
+                        "spot_high": today_high,
+                        "spot_low": today_low,
+                        "_ts": now,
+                    }
+                except Exception as e:
+                    print(f"[AGG] Trend calc error for {idx}: {e}")
+
     async def run_cycle(self, index_id: str | None = None) -> dict:
         """Run detectors for active index only (not all 3) for speed."""
         # Only run active index to avoid 3x API calls
@@ -218,6 +317,9 @@ class UserAggregator:
                     spots[idx] = await self._get_spot_cached(cfg["symbol"])
                 except Exception:
                     spots[idx] = 0
+
+        # Gap & Trend calculation for each index
+        await self._calculate_trend(spots, targets)
 
         # Build chains + run detectors for target indices
         for idx in targets:
@@ -476,6 +578,8 @@ class UserAggregator:
             # VIX
             "india_vix": self.india_vix,
             "vix_enabled": self.vix_enabled,
+            # Trend & Gap data
+            "trend_data": self.trend_data,
         }
 
 
