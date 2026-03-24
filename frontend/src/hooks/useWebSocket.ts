@@ -76,10 +76,17 @@ export function useWebSocket(sessionId: string | null) {
   const timer = useRef<number>()
   const pingT = useRef(0)
   const retries = useRef(0)
+  const intentionalClose = useRef(false)
 
   const connect = useCallback(() => {
     if (!sessionId) return
-    // WebSocket must connect DIRECTLY to Render backend — Netlify doesn't proxy WebSocket
+    // Close existing connection if any
+    if (wsRef.current && wsRef.current.readyState <= 1) {
+      intentionalClose.current = true
+      wsRef.current.close()
+    }
+    intentionalClose.current = false
+
     const isLocal = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'
     const wsHost = import.meta.env.VITE_API_URL
       ? new URL(import.meta.env.VITE_API_URL).host
@@ -89,8 +96,9 @@ export function useWebSocket(sessionId: string | null) {
     ws.onopen = () => {
       setConnected(true)
       retries.current = 0
+      console.log('[WS] Connected')
       const ping = () => { if (ws.readyState === 1) { pingT.current = performance.now(); ws.send('ping') } }
-      timer.current = window.setInterval(ping, 8000)
+      timer.current = window.setInterval(ping, 15000) // 15s ping — less aggressive, survives background
       ping()
     }
     ws.onmessage = (ev) => {
@@ -100,6 +108,10 @@ export function useWebSocket(sessionId: string | null) {
     ws.onclose = (ev) => {
       setConnected(false)
       clearInterval(timer.current)
+
+      // If we closed it intentionally (reconnect / cleanup), don't retry
+      if (intentionalClose.current) return
+
       // 4001 = session expired/invalid — clear and force re-login
       if (ev.code === 4001) {
         console.warn('[WS] Session expired — clearing auth')
@@ -109,17 +121,13 @@ export function useWebSocket(sessionId: string | null) {
         window.location.reload()
         return
       }
-      // Retry with backoff, max 5 retries then force re-login
+
+      // UNLIMITED retries — never logout on disconnect, keep trying forever
+      // Background tabs, minimize, switch windows — always reconnect
       retries.current++
-      if (retries.current > 5) {
-        console.warn('[WS] Max retries — clearing auth')
-        localStorage.removeItem('tb_session')
-        localStorage.removeItem('tb_session_id')
-        localStorage.removeItem('tb_step')
-        window.location.reload()
-        return
-      }
-      setTimeout(connect, Math.min(3000 * retries.current, 10000))
+      const delay = Math.min(2000 * retries.current, 15000) // max 15s between retries
+      console.log(`[WS] Disconnected (code=${ev.code}), retry #${retries.current} in ${delay}ms`)
+      setTimeout(connect, delay)
     }
     ws.onerror = () => ws.close()
     wsRef.current = ws
@@ -136,7 +144,46 @@ export function useWebSocket(sessionId: string | null) {
   useEffect(() => {
     if (!sessionId) return
     connect()
-    return () => { wsRef.current?.close(); clearInterval(timer.current) }
+
+    // Reconnect INSTANTLY when tab becomes visible again
+    const onVisibility = () => {
+      if (document.visibilityState === 'visible') {
+        console.log('[WS] Tab visible — checking connection')
+        if (!wsRef.current || wsRef.current.readyState > 1) {
+          retries.current = 0 // reset retries on manual focus
+          connect()
+        }
+      }
+    }
+
+    // Also reconnect on window focus (covers more cases)
+    const onFocus = () => {
+      if (!wsRef.current || wsRef.current.readyState > 1) {
+        console.log('[WS] Window focused — reconnecting')
+        retries.current = 0
+        connect()
+      }
+    }
+
+    // Reconnect on network coming back online
+    const onOnline = () => {
+      console.log('[WS] Network online — reconnecting')
+      retries.current = 0
+      connect()
+    }
+
+    document.addEventListener('visibilitychange', onVisibility)
+    window.addEventListener('focus', onFocus)
+    window.addEventListener('online', onOnline)
+
+    return () => {
+      intentionalClose.current = true
+      wsRef.current?.close()
+      clearInterval(timer.current)
+      document.removeEventListener('visibilitychange', onVisibility)
+      window.removeEventListener('focus', onFocus)
+      window.removeEventListener('online', onOnline)
+    }
   }, [sessionId, connect])
 
   return { state, connected, latency, switchIndex, toggleVix }
