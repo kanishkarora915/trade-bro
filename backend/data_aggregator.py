@@ -378,22 +378,43 @@ class UserAggregator:
                 state.error = ""
                 state.last_fetch = time.time()
 
-                # Flow tape entries — all strikes, lower threshold for better SELL detection
+                # Flow tape entries — smart BUY/SELL detection using OI + price + buy_pct
                 for strike in strikes_list:
                     for side in ("CE", "PE"):
                         info = state.chain[strike].get(side)
                         if info and info.get("volume", 0) > 200:
                             bp = info.get("buy_pct", 0.5)
-                            flow_type = "BUY" if bp > 0.55 else "SELL" if bp < 0.45 else "NEUTRAL"
+                            oi_chg = info.get("oi_day_change", 0)
+                            net_chg = info.get("net_change", 0)
+                            ltp = info.get("last_price", 0)
+
+                            # Smart classification:
+                            # 1. OI increasing + price rising = BUYING (new longs)
+                            # 2. OI increasing + price falling = SELLING/WRITING (new shorts)
+                            # 3. OI decreasing + price rising = SHORT COVERING (old shorts closing)
+                            # 4. OI decreasing + price falling = LONG UNWINDING (old longs closing)
+                            # Fallback to buy_pct if OI data unavailable
+                            if oi_chg > 0 and net_chg < 0 and ltp > 0:
+                                flow_type = "SELL"  # OI building + price falling = writing
+                            elif oi_chg > 0 and net_chg >= 0:
+                                flow_type = "BUY"   # OI building + price rising = fresh buying
+                            elif bp > 0.55:
+                                flow_type = "BUY"
+                            elif bp < 0.45:
+                                flow_type = "SELL"
+                            else:
+                                flow_type = "NEUTRAL"
+
                             self.flow_tape.append({
                                 "time": datetime.now().isoformat(),
                                 "index": idx,
                                 "strike": f"{int(strike)} {side}",
-                                "side": side,  # separate CE/PE field
-                                "price": info["last_price"],
+                                "side": side,
+                                "price": ltp,
                                 "volume": info["volume"],
                                 "oi": info["oi"],
-                                "oi_chg": info.get("oi_day_change", 0),
+                                "oi_chg": oi_chg,
+                                "net_chg": net_chg,
                                 "buy_pct": round(bp * 100, 1),
                                 "iv": info.get("iv", 0),
                                 "type": flow_type,
