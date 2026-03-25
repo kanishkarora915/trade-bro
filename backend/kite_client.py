@@ -110,7 +110,7 @@ class KiteClient:
             }
 
     async def _get(self, path: str, params: list | None = None) -> httpx.Response:
-        async with httpx.AsyncClient(timeout=12) as client:
+        async with httpx.AsyncClient(timeout=8) as client:
             r = await client.get(f"{BASE}{path}", params=params, headers=self.headers)
             r.raise_for_status()
             return r

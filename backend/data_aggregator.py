@@ -156,7 +156,7 @@ class UserAggregator:
         except Exception:
             return self.india_vix
 
-    async def _build_chain_cached(self, index_id: str, spot: float, ttl: float = 25) -> dict:
+    async def _build_chain_cached(self, index_id: str, spot: float, ttl: float = 8) -> dict:
         now = time.time()
         key = f"chain_{index_id}"
         if key in self._cache:
@@ -374,42 +374,45 @@ class UserAggregator:
         # Only run active index to avoid 3x API calls
         targets = [index_id] if index_id else [self.active_index]
 
-        # Non-blocking FII/DII fetch (runs in background, doesn't delay cycle)
+        # NON-BLOCKING: FII/DII in background
         self._start_fii_dii_background()
 
-        # Fetch VIX alongside spot prices
-        try:
-            await self._fetch_vix()
-        except Exception:
-            pass
-
-        # Fetch spot prices — also fetch non-active indices for display
+        # PARALLEL FETCH: VIX + Spot prices + Chain build — all at once
         spots = {}
         all_symbols = [(idx, INDICES[idx]["symbol"]) for idx in INDICES]
-        try:
-            symbols_to_fetch = [s for _, s in all_symbols]
-            data = await self.kite.get_ltp(symbols_to_fetch)
-            for idx, sym in all_symbols:
-                price = data.get(sym, {}).get("last_price", 0)
-                if price > 0:
-                    spots[idx] = price
-                    self.indices[idx].spot = price
-                    self._spot_cache[sym] = (time.time(), price)
-        except Exception as e:
-            print(f"[AGG] Spot fetch error: {e}")
-            # Fallback: try individual
-            for idx in targets:
-                cfg = INDICES[idx]
-                try:
-                    spots[idx] = await self._get_spot_cached(cfg["symbol"])
-                except Exception:
-                    spots[idx] = 0
 
-        # Gap & Trend calculation for each index
+        async def _fetch_spots():
+            try:
+                symbols_to_fetch = [s for _, s in all_symbols]
+                data = await self.kite.get_ltp(symbols_to_fetch)
+                for idx, sym in all_symbols:
+                    price = data.get(sym, {}).get("last_price", 0)
+                    if price > 0:
+                        spots[idx] = price
+                        self.indices[idx].spot = price
+                        self._spot_cache[sym] = (time.time(), price)
+            except Exception as e:
+                print(f"[AGG] Spot fetch error: {e}")
+                for idx in targets:
+                    cfg = INDICES[idx]
+                    spots[idx] = self._spot_cache.get(cfg["symbol"], (0, 0))[1]
+
+        async def _fetch_vix_task():
+            try:
+                await self._fetch_vix()
+            except Exception:
+                pass
+
+        # Run spots + VIX + timeframes in PARALLEL — saves ~400ms per cycle
+        await asyncio.gather(
+            _fetch_spots(),
+            _fetch_vix_task(),
+            self._refresh_timeframes(targets),
+            return_exceptions=True,
+        )
+
+        # Trend calc (needs spots, so runs after)
         await self._calculate_trend(spots, targets)
-
-        # Multi-timeframe analysis (staggered refresh)
-        await self._refresh_timeframes(targets)
 
         # Build chains + run detectors for target indices
         for idx in targets:
