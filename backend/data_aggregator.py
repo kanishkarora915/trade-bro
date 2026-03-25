@@ -536,25 +536,47 @@ class UserAggregator:
                 state.brain = generate(state.confluence, state.detectors, raw)
                 state.strike_map = state.detectors.get("d06_confluence_map", {}).get("strike_map", [])
 
-                # Signal history tracking
+                # Signal history tracking — QUALITY GATE + COOLDOWN
                 if state.brain.get("active") and state.brain.get("primary"):
-                    signal_entry = {
-                        **state.brain,
-                        "index": idx,
-                        "recorded_at": now_ist_iso(),
-                        "spot_at_signal": spot,
-                    }
-                    self.last_signal = signal_entry
-                    should_add = True
-                    if self.signal_history:
-                        last = self.signal_history[-1]
-                        if (last.get("primary", {}).get("strike") == state.brain["primary"].get("strike")
-                                and last.get("direction") == state.brain.get("direction")):
-                            should_add = False
-                    if should_add:
+                    new_strike = state.brain["primary"].get("strike", "")
+                    new_dir = state.brain.get("direction", "")
+                    new_score = state.brain.get("score", 0)
+                    now_ts = time.time()
+
+                    # Quality gate: minimum 3 CRITICAL/ALERT detectors must fire
+                    firing_count = sum(1 for d in state.detectors.values() if d.get("status") in ("CRITICAL", "ALERT"))
+                    quality_pass = firing_count >= 3 and new_score >= 40
+
+                    # Cooldown: same strike+direction can't signal again within 15 min
+                    cooldown_ok = True
+                    is_reentry = False
+                    for prev in reversed(self.signal_history):
+                        if (prev.get("primary", {}).get("strike") == new_strike
+                                and prev.get("direction") == new_dir):
+                            prev_time = prev.get("_ts", 0)
+                            if now_ts - prev_time < 900:  # 15 min cooldown
+                                cooldown_ok = False
+                            elif now_ts - prev_time < 3600:  # within 1 hour = re-entry
+                                is_reentry = True
+                            break
+
+                    if quality_pass and cooldown_ok:
+                        signal_entry = {
+                            **state.brain,
+                            "index": idx,
+                            "recorded_at": now_ist_iso(),
+                            "spot_at_signal": spot,
+                            "firing_count": firing_count,
+                            "is_reentry": is_reentry,
+                            "_ts": now_ts,  # internal timestamp for cooldown
+                        }
+                        if is_reentry:
+                            signal_entry["reentry_note"] = f"RE-ENTRY: Same setup as earlier, price now {state.brain['primary'].get('cmp', '?')}"
+
+                        self.last_signal = signal_entry
                         self.signal_history.append(signal_entry)
                         self.signal_history = self.signal_history[-50:]
-                        # Persist to disk — survives restarts
+                        # Persist to disk
                         try:
                             self.data_store.append_signal(signal_entry)
                         except Exception:
