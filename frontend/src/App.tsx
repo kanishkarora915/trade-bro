@@ -16,6 +16,7 @@ import StrikeDetail from './components/StrikeDetail'
 import FlowDashboard from './components/FlowDashboard'
 import AnalyticsDashboard from './components/AnalyticsDashboard'
 import TimeframeDashboard from './components/TimeframeDashboard'
+import CheckTrades from './components/CheckTrades'
 
 export default function App() {
   const { step, session, error, loading, verifyLicense, setKiteCredentials, logout } = useSession()
@@ -25,7 +26,7 @@ export default function App() {
 
   const [selectedDetector, setSelectedDetector] = useState<DetectorResult | null>(null)
   const [showChain, setShowChain] = useState(false)
-  const [activeTab, setActiveTab] = useState<'main' | 'flow' | 'analytics' | 'timeframes'>('main')
+  const [activeTab, setActiveTab] = useState<'main' | 'flow' | 'analytics' | 'timeframes' | 'check'>('main')
 
   // Zerodha callback — NO spinner, just process silently in background
   // useSession handles the token exchange automatically
@@ -42,6 +43,7 @@ export default function App() {
     { id: 'flow' as const, label: 'Flow', color: 'text-neon-purple', bg: 'bg-neon-purple/10' },
     { id: 'analytics' as const, label: 'Analytics', color: 'text-neon-cyan', bg: 'bg-neon-cyan/10' },
     { id: 'timeframes' as const, label: 'Timeframes', color: 'text-neon-yellow', bg: 'bg-neon-yellow/10' },
+    { id: 'check' as const, label: 'Check Trades', color: 'text-orange-400', bg: 'bg-orange-400/10' },
   ]
 
   return (
@@ -80,6 +82,8 @@ export default function App() {
         <AnalyticsDashboard state={state} onBack={() => setActiveTab('main')} sessionId={session?.session_id} />
       ) : activeTab === 'timeframes' ? (
         <TimeframeDashboard state={state} onBack={() => setActiveTab('main')} />
+      ) : activeTab === 'check' ? (
+        <CheckTrades state={state} />
       ) : (
       <>
       {/* MAIN DASHBOARD CONTENT */}

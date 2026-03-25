@@ -22,6 +22,7 @@ from kite_ticker import KiteTicker
 from nse_scraper import fetch_fii_dii
 from ai_analyst import generate_analysis
 from detectors import ALL_DETECTORS
+from check_trades_engine import analyze_setups
 from confluence_engine import calculate
 from brain_signal import generate
 from timeframe_engine import TimeframeEngine
@@ -110,6 +111,7 @@ class UserAggregator:
         self.fii_dii: dict = {}
         self.india_vix: float = 0.0
         self.vix_enabled: bool = True  # VIX integration toggle
+        self.check_trades: list = []  # MTF + OI trade setups
         self.tf_engine = TimeframeEngine(kite)
         self.data_store = DataStore()
         # Load persisted signals from disk (survives restarts!)
@@ -667,6 +669,25 @@ class UserAggregator:
                                      "bullets": [], "sentiment": "NEUTRAL", "confidence": "LOW",
                                      "risk_notes": [], "timestamp": now_ist_iso()}
 
+        # Check Trades — MTF + OI explosion detection
+        if active_state.chain:
+            try:
+                zone = self._analyze_zones()
+                tf = self.tf_engine.get_cached(self.active_index)
+                self.check_trades = analyze_setups(
+                    chain=active_state.chain,
+                    spot=active_state.spot,
+                    atm=active_state.atm,
+                    zone_analysis=zone,
+                    tf_data=tf,
+                    confluence=active_state.confluence,
+                    detectors=active_state.detectors,
+                    index_id=self.active_index,
+                    strike_step=active_state.cfg["strike_step"],
+                )
+            except Exception as e:
+                print(f"[AGG] Check trades error: {e}")
+
         self.alert_log = self.alert_log[-200:]
         self.flow_tape = self.flow_tape[-100:]
         return self.get_state()
@@ -803,6 +824,8 @@ class UserAggregator:
             "mtf_analysis": self.mtf_analysis,
             # Zone analysis
             "zone_analysis": self._analyze_zones(),
+            # Check Trades — MTF + OI setups
+            "check_trades": self.check_trades,
         }
 
 
