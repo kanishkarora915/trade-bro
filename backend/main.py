@@ -298,6 +298,46 @@ async def toggle_vix(session_id: str):
     return {"vix_enabled": agg.vix_enabled}
 
 
+# --- Data Management ---
+@app.delete("/api/data/signals/{session_id}")
+async def clear_today_signals(session_id: str):
+    """Clear today's signal history."""
+    sess = session_mgr.get_session(session_id)
+    if not sess or not sess.is_authenticated:
+        raise HTTPException(403, "Not authenticated")
+    kite = KiteClient(sess.kite_api_key, sess.kite_access_token)
+    ticker = user_tickers.get(session_id)
+    agg = get_or_create_aggregator(session_id, kite, ticker)
+    from datetime import datetime, timezone, timedelta
+    today = datetime.now(timezone(timedelta(hours=5, minutes=30))).strftime("%Y-%m-%d")
+    agg.signal_history = []
+    agg.last_signal = None
+    agg.data_store.save_signals(today, [])
+    return {"cleared": "signals", "date": today}
+
+
+@app.delete("/api/data/all/{session_id}")
+async def clear_all_data(session_id: str):
+    """Clear all saved data (signals + snapshots + levels)."""
+    sess = session_mgr.get_session(session_id)
+    if not sess or not sess.is_authenticated:
+        raise HTTPException(403, "Not authenticated")
+    kite = KiteClient(sess.kite_api_key, sess.kite_access_token)
+    ticker = user_tickers.get(session_id)
+    agg = get_or_create_aggregator(session_id, kite, ticker)
+    agg.signal_history = []
+    agg.last_signal = None
+    agg.alert_log = []
+    import shutil, os
+    data_dir = os.environ.get("DATA_DIR", os.path.join(os.path.dirname(__file__), "data"))
+    for sub in ["signals", "daily", "levels"]:
+        p = os.path.join(data_dir, sub)
+        if os.path.exists(p):
+            shutil.rmtree(p)
+            os.makedirs(p, exist_ok=True)
+    return {"cleared": "all"}
+
+
 # --- State REST fallback ---
 @app.get("/api/state/{session_id}")
 async def get_state(session_id: str):

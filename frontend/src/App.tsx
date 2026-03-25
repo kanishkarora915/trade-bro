@@ -77,7 +77,7 @@ export default function App() {
       {activeTab === 'flow' ? (
         <FlowDashboard state={state} onBack={() => setActiveTab('main')} />
       ) : activeTab === 'analytics' ? (
-        <AnalyticsDashboard state={state} onBack={() => setActiveTab('main')} />
+        <AnalyticsDashboard state={state} onBack={() => setActiveTab('main')} sessionId={session?.session_id} />
       ) : activeTab === 'timeframes' ? (
         <TimeframeDashboard state={state} onBack={() => setActiveTab('main')} />
       ) : (

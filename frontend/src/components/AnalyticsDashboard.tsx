@@ -1,7 +1,7 @@
-import { useMemo } from 'react'
+import { useMemo, useState } from 'react'
 import type { TradeState, SignalHistoryEntry, ChainRow } from '../hooks/useWebSocket'
 
-interface Props { state: TradeState; onBack: () => void }
+interface Props { state: TradeState; onBack: () => void; sessionId?: string }
 
 /* ─── helpers ─── */
 function fmtTime(t: string): string {
@@ -329,8 +329,34 @@ function exportPDF(journal: JournalEntry[]) {
 
 /* ─── main component ─── */
 
-export default function AnalyticsDashboard({ state, onBack }: Props) {
+export default function AnalyticsDashboard({ state, onBack, sessionId }: Props) {
   const { signal_history, chain_summary, spot } = state
+  const [showDeleteMenu, setShowDeleteMenu] = useState(false)
+  const [deleteStatus, setDeleteStatus] = useState('')
+
+  const API = (import.meta as any).env?.VITE_API_URL || ''
+
+  const clearSignals = async () => {
+    if (!sessionId) return
+    if (!confirm('Clear today\'s signals? This cannot be undone.')) return
+    try {
+      await fetch(`${API}/api/data/signals/${sessionId}`, { method: 'DELETE' })
+      setDeleteStatus('Signals cleared! Refresh to see changes.')
+      setShowDeleteMenu(false)
+      setTimeout(() => setDeleteStatus(''), 3000)
+    } catch { setDeleteStatus('Failed to clear') }
+  }
+
+  const clearAll = async () => {
+    if (!sessionId) return
+    if (!confirm('Delete ALL saved data? Signals, snapshots, levels — everything gone forever!')) return
+    try {
+      await fetch(`${API}/api/data/all/${sessionId}`, { method: 'DELETE' })
+      setDeleteStatus('All data cleared! Refresh to see changes.')
+      setShowDeleteMenu(false)
+      setTimeout(() => setDeleteStatus(''), 3000)
+    } catch { setDeleteStatus('Failed to clear') }
+  }
 
   const journal = useMemo(
     () => buildJournal(signal_history ? [...signal_history].reverse() : [], spot, chain_summary || []),
@@ -348,13 +374,37 @@ export default function AnalyticsDashboard({ state, onBack }: Props) {
           <span className="text-sm font-extrabold text-white tracking-wide">ANALYTICS DASHBOARD</span>
           <span className="text-[9px] text-gray-500 font-mono">SPOT {spot.toLocaleString('en-IN')}</span>
         </div>
-        <button
-          onClick={() => exportPDF(journal)}
-          className="text-[10px] font-bold text-neon-cyan border border-neon-cyan/30 px-4 py-1.5 rounded-lg hover:bg-neon-cyan/10 transition-all flex items-center gap-1.5"
-        >
-          <span>Export Today&apos;s Trades</span>
-          <span className="text-[9px] opacity-60">PDF</span>
-        </button>
+        <div className="flex items-center gap-2 relative">
+          {deleteStatus && <span className="text-[10px] text-green-400 font-mono animate-pulse">{deleteStatus}</span>}
+          <button
+            onClick={() => exportPDF(journal)}
+            className="text-[10px] font-bold text-neon-cyan border border-neon-cyan/30 px-4 py-1.5 rounded-lg hover:bg-neon-cyan/10 transition-all flex items-center gap-1.5"
+          >
+            <span>Export Trades</span>
+            <span className="text-[9px] opacity-60">PDF</span>
+          </button>
+          <div className="relative">
+            <button
+              onClick={() => setShowDeleteMenu(!showDeleteMenu)}
+              className="text-[10px] font-bold text-red-400 border border-red-500/30 px-3 py-1.5 rounded-lg hover:bg-red-500/10 transition-all"
+            >
+              🗑 Delete Data
+            </button>
+            {showDeleteMenu && (
+              <div className="absolute right-0 top-full mt-1 bg-gray-900 border border-red-500/40 rounded-xl shadow-2xl z-50 p-2 min-w-[200px]">
+                <button onClick={clearSignals} className="w-full text-left text-[11px] text-gray-300 hover:text-white hover:bg-red-900/30 rounded-lg px-3 py-2 transition-all">
+                  Clear Today&apos;s Signals
+                </button>
+                <button onClick={clearAll} className="w-full text-left text-[11px] text-red-400 hover:text-red-300 hover:bg-red-900/30 rounded-lg px-3 py-2 transition-all font-bold">
+                  Delete ALL Data (Forever)
+                </button>
+                <button onClick={() => setShowDeleteMenu(false)} className="w-full text-left text-[11px] text-gray-500 hover:text-gray-300 rounded-lg px-3 py-2 mt-1 transition-all">
+                  Cancel
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
       </div>
 
       {/* Content */}
