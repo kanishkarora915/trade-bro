@@ -5,8 +5,19 @@ Fixes: Non-blocking FII/DII fetch, only active index per cycle, India VIX suppor
 
 import asyncio
 import time
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 from kite_client import KiteClient
+
+# IST timezone
+IST = timezone(timedelta(hours=5, minutes=30))
+
+def now_ist() -> datetime:
+    """Get current time in IST."""
+    return datetime.now(IST)
+
+def now_ist_iso() -> str:
+    """Get current time in IST as ISO string."""
+    return now_ist().isoformat()
 from kite_ticker import KiteTicker
 from nse_scraper import fetch_fii_dii
 from ai_analyst import generate_analysis
@@ -446,7 +457,7 @@ class UserAggregator:
                     "max_pain": state.atm, "depth_map": {},
                     "expiry_date": chain_data.get("expiry", ""),
                     "is_expiry_day": False, "time_to_expiry_mins": 1440,
-                    "trend": 0, "timestamp": datetime.now().isoformat(),
+                    "trend": 0, "timestamp": now_ist_iso(),
                     # VIX data
                     "india_vix": self.india_vix,
                     "vix_enabled": self.vix_enabled,
@@ -527,7 +538,7 @@ class UserAggregator:
                     signal_entry = {
                         **state.brain,
                         "index": idx,
-                        "recorded_at": datetime.now().isoformat(),
+                        "recorded_at": now_ist_iso(),
                         "spot_at_signal": spot,
                     }
                     self.last_signal = signal_entry
@@ -545,12 +556,12 @@ class UserAggregator:
                 score = state.confluence.get("score", 0)
                 prev = self._prev_scores.get(idx, 0)
                 if score >= 76 and prev < 76:
-                    self.alert_log.append({"type": "SIGNAL", "time": datetime.now().isoformat(),
+                    self.alert_log.append({"type": "SIGNAL", "time": now_ist_iso(),
                                            "message": f"[{idx}] CONFLUENCE {state.confluence['status']} — Score {score:.0f} — {state.confluence['direction']}"})
                 for det_id, result in state.detectors.items():
                     if result.get("status") in ("CRITICAL", "ALERT"):
                         for a in result.get("alerts", [])[:1]:
-                            self.alert_log.append({"type": result["status"], "time": datetime.now().isoformat(),
+                            self.alert_log.append({"type": result["status"], "time": now_ist_iso(),
                                                     "message": f"[{idx}] {result.get('name', det_id)} — {result.get('metric', '')}"})
                 self._prev_scores[idx] = score
                 state.error = ""
@@ -584,7 +595,7 @@ class UserAggregator:
                                 flow_type = "NEUTRAL"
 
                             self.flow_tape.append({
-                                "time": datetime.now().isoformat(),
+                                "time": now_ist_iso(),
                                 "index": idx,
                                 "strike": f"{int(strike)} {side}",
                                 "side": side,
@@ -621,7 +632,7 @@ class UserAggregator:
             except Exception as e:
                 self.ai_analysis = {"summary": "Analysis unavailable", "analysis": str(e)[:100],
                                      "bullets": [], "sentiment": "NEUTRAL", "confidence": "LOW",
-                                     "risk_notes": [], "timestamp": datetime.now().isoformat()}
+                                     "risk_notes": [], "timestamp": now_ist_iso()}
 
         self.alert_log = self.alert_log[-200:]
         self.flow_tape = self.flow_tape[-100:]
@@ -734,7 +745,7 @@ class UserAggregator:
             "spots": {k: v.spot for k, v in self.indices.items()},
             "alert_log": self.alert_log[-30:],
             "flow_tape": self.flow_tape[-50:],
-            "timestamp": datetime.now().isoformat(),
+            "timestamp": now_ist_iso(),
             # Active index shortcut fields
             "spot": active_state.spot,
             "atm": active_state.atm,

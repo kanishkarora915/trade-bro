@@ -28,9 +28,10 @@ interface JournalEntry {
   sl: number
   status: 'OPEN' | 'TARGET HIT' | 'SL HIT'
   pnl: number
+  ltp?: number
 }
 
-function buildJournal(signals: SignalHistoryEntry[], currentSpot: number): JournalEntry[] {
+function buildJournal(signals: SignalHistoryEntry[], currentSpot: number, chain: ChainRow[]): JournalEntry[] {
   return signals
     .filter(s => s.active && s.primary)
     .map(s => {
@@ -38,20 +39,29 @@ function buildJournal(signals: SignalHistoryEntry[], currentSpot: number): Journ
       const entry = p.cmp_raw || parseNum(p.cmp)
       const target = parseNum(p.target1)
       const sl = parseNum(p.stop_loss)
-      const spot = currentSpot
       const isBull = s.direction === 'BULLISH' || p.action?.includes('BUY')
+
+      // Find OPTION's current LTP from chain (NOT nifty spot!)
+      const strikeNum = parseNum(p.strike)
+      const chainRow = chain.find(r => r.strike === strikeNum)
+      // If strike contains CE, use ce_ltp; if PE, use pe_ltp
+      const isCE = p.strike?.includes('CE') || (isBull && !p.strike?.includes('PE'))
+      const currentLTP = chainRow ? (isCE ? chainRow.ce_ltp : chainRow.pe_ltp) : 0
 
       let status: JournalEntry['status'] = 'OPEN'
       let pnl = 0
 
-      if (isBull) {
-        if (spot >= target && target > 0) { status = 'TARGET HIT'; pnl = target - entry }
-        else if (spot <= sl && sl > 0) { status = 'SL HIT'; pnl = sl - entry }
-        else { pnl = spot - entry }
-      } else {
-        if (spot <= target && target > 0) { status = 'TARGET HIT'; pnl = entry - target }
-        else if (spot >= sl && sl > 0) { status = 'SL HIT'; pnl = entry - sl }
-        else { pnl = entry - spot }
+      if (currentLTP > 0) {
+        // Compare option LTP against option target/SL
+        if (isBull) {
+          if (currentLTP >= target && target > 0) { status = 'TARGET HIT'; pnl = target - entry }
+          else if (currentLTP <= sl && sl > 0) { status = 'SL HIT'; pnl = sl - entry }
+          else { pnl = currentLTP - entry }
+        } else {
+          if (currentLTP <= target && target > 0) { status = 'TARGET HIT'; pnl = entry - target }
+          else if (currentLTP >= sl && sl > 0) { status = 'SL HIT'; pnl = entry - sl }
+          else { pnl = entry - currentLTP }
+        }
       }
 
       return {
@@ -63,7 +73,8 @@ function buildJournal(signals: SignalHistoryEntry[], currentSpot: number): Journ
         sl,
         status,
         pnl: Math.round(pnl * 100) / 100,
-      }
+        ltp: currentLTP,
+      } as JournalEntry
     })
 }
 
@@ -175,6 +186,7 @@ function TradeJournal({ journal }: { journal: JournalEntry[] }) {
               <th className="text-left px-2 py-1.5 font-medium">Dir</th>
               <th className="text-left px-2 py-1.5 font-medium">Strike</th>
               <th className="text-right px-2 py-1.5 font-medium">Entry</th>
+              <th className="text-right px-2 py-1.5 font-medium">LTP</th>
               <th className="text-right px-2 py-1.5 font-medium">Target</th>
               <th className="text-right px-2 py-1.5 font-medium">SL</th>
               <th className="text-center px-2 py-1.5 font-medium">Status</th>
@@ -192,6 +204,9 @@ function TradeJournal({ journal }: { journal: JournalEntry[] }) {
                   <td className={`px-2 py-1.5 font-bold ${dirClr}`}>{t.direction?.slice(0, 4)}</td>
                   <td className="px-2 py-1.5 text-white font-bold">{t.strike}</td>
                   <td className="px-2 py-1.5 text-right text-gray-300">{t.entry.toFixed(1)}</td>
+                  <td className={`px-2 py-1.5 text-right font-bold ${(t.ltp || 0) > t.entry ? 'text-green-400' : (t.ltp || 0) < t.entry ? 'text-red-400' : 'text-gray-400'}`}>
+                    {t.ltp ? `₹${t.ltp.toFixed(1)}` : '—'}
+                  </td>
                   <td className="px-2 py-1.5 text-right text-cyan-400">{t.target.toFixed(1)}</td>
                   <td className="px-2 py-1.5 text-right text-orange-400">{t.sl.toFixed(1)}</td>
                   <td className="px-2 py-1.5 text-center">
@@ -318,8 +333,8 @@ export default function AnalyticsDashboard({ state, onBack }: Props) {
   const { signal_history, chain_summary, spot } = state
 
   const journal = useMemo(
-    () => buildJournal(signal_history ? [...signal_history].reverse() : [], spot),
-    [signal_history, spot]
+    () => buildJournal(signal_history ? [...signal_history].reverse() : [], spot, chain_summary || []),
+    [signal_history, spot, chain_summary]
   )
 
   return (
