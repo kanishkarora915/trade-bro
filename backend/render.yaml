@@ -2,9 +2,15 @@ services:
   - type: web
     name: trade-bro-backend
     runtime: python
-    plan: free
+    plan: starter
     buildCommand: pip install -r requirements.txt
     startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    disk:
+      name: trade-bro-data
+      mountPath: /data
+      sizeGB: 1
     envVars:
       - key: FRONTEND_URL
         value: https://trade-bro.netlify.app
+      - key: DATA_DIR
+        value: /data

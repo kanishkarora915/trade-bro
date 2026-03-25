@@ -39,7 +39,7 @@ BANKNIFTY_SYMBOL = "NIFTY BANK"
 NIFTY_STRIKE_STEP = 50
 OPTION_CHAIN_RANGE = 500
 
-REFRESH_OPTION_CHAIN_SEC = 20  # faster refresh — 20s instead of 30s
+REFRESH_OPTION_CHAIN_SEC = 10  # fastest — 10s for real-time feel
 REFRESH_PRICE_SEC = 5
 
 # Session config

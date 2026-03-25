@@ -106,14 +106,17 @@ class UserAggregator:
         self.active_index = "NIFTY"
         self.alert_log: list[dict] = []
         self.flow_tape: list[dict] = []
-        self.signal_history: list[dict] = []
-        self.last_signal: dict | None = None
         self.ai_analysis: dict = {}
         self.fii_dii: dict = {}
         self.india_vix: float = 0.0
         self.vix_enabled: bool = True  # VIX integration toggle
         self.tf_engine = TimeframeEngine(kite)
         self.data_store = DataStore()
+        # Load persisted signals from disk (survives restarts!)
+        today = now_ist().strftime("%Y-%m-%d")
+        self.signal_history: list[dict] = self.data_store.load_signals(today)
+        self.last_signal: dict | None = self.signal_history[-1] if self.signal_history else None
+        print(f"[AGG] Loaded {len(self.signal_history)} signals from disk for {today}")
         self.mtf_analysis: dict = {}
         self._last_tf_short: float = 0  # last short TF refresh
         self._last_tf_long: float = 0   # last long TF refresh
@@ -551,6 +554,11 @@ class UserAggregator:
                     if should_add:
                         self.signal_history.append(signal_entry)
                         self.signal_history = self.signal_history[-50:]
+                        # Persist to disk — survives restarts
+                        try:
+                            self.data_store.append_signal(signal_entry)
+                        except Exception:
+                            pass
 
                 # Alerts
                 score = state.confluence.get("score", 0)
