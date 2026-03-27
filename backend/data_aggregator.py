@@ -541,27 +541,35 @@ class UserAggregator:
                 state.brain = generate(state.confluence, state.detectors, raw)
                 state.strike_map = state.detectors.get("d06_confluence_map", {}).get("strike_map", [])
 
-                # Signal history tracking — QUALITY GATE + COOLDOWN
+                # Signal history tracking — AGGRESSIVE + ACCURACY-GATED REPEATS
                 if state.brain.get("active") and state.brain.get("primary"):
                     new_strike = state.brain["primary"].get("strike", "")
                     new_dir = state.brain.get("direction", "")
                     new_score = state.brain.get("score", 0)
                     now_ts = time.time()
 
-                    # Quality gate: minimum 3 CRITICAL/ALERT detectors must fire
                     firing_count = sum(1 for d in state.detectors.values() if d.get("status") in ("CRITICAL", "ALERT"))
-                    quality_pass = firing_count >= 3 and new_score >= 40
+                    # Original aggressive: just 1 detector firing is enough
+                    quality_pass = firing_count >= 1
 
-                    # Cooldown: same strike+direction can't signal again within 15 min
+                    # Repeat signal logic: 5 min cooldown (was 15 min)
+                    # Repeat only if accuracy > 90% on that strike
                     cooldown_ok = True
                     is_reentry = False
                     for prev in reversed(self.signal_history):
                         if (prev.get("primary", {}).get("strike") == new_strike
                                 and prev.get("direction") == new_dir):
                             prev_time = prev.get("_ts", 0)
-                            if now_ts - prev_time < 900:  # 15 min cooldown
-                                cooldown_ok = False
-                            elif now_ts - prev_time < 3600:  # within 1 hour = re-entry
+                            if now_ts - prev_time < 300:  # 5 min cooldown (was 15)
+                                # Check accuracy: only repeat if win rate > 90% on this strike
+                                strike_signals = [s for s in self.signal_history if s.get("primary", {}).get("strike") == new_strike]
+                                wins = sum(1 for s in strike_signals if s.get("result") == "TARGET_HIT")
+                                total = sum(1 for s in strike_signals if s.get("result") in ("TARGET_HIT", "SL_HIT"))
+                                accuracy = (wins / total * 100) if total > 0 else 0
+                                if accuracy < 90 or total == 0:
+                                    cooldown_ok = False  # block repeat — accuracy too low
+                                # else: allow repeat — 90%+ accuracy on this strike
+                            elif now_ts - prev_time < 1800:  # within 30 min = re-entry
                                 is_reentry = True
                             break
 
@@ -652,6 +660,9 @@ class UserAggregator:
         if self.ticker:
             self.ticker.clear_consumed()
 
+        # Track signal results (auto-train accuracy)
+        self._track_signal_results()
+
         # AI analysis for active index
         active_state = self.indices[self.active_index]
         if active_state.detectors:
@@ -691,6 +702,90 @@ class UserAggregator:
         self.alert_log = self.alert_log[-200:]
         self.flow_tape = self.flow_tape[-100:]
         return self.get_state()
+
+    def _track_signal_results(self):
+        """Check old signals: did they hit target or SL? Auto-train accuracy."""
+        active = self.indices[self.active_index]
+        chain = active.chain
+        if not chain:
+            return
+
+        for sig in self.signal_history:
+            if sig.get("result"):
+                continue  # already tracked
+            primary = sig.get("primary")
+            if not primary:
+                continue
+
+            # Parse strike and side
+            strike_str = primary.get("strike", "")
+            parts = strike_str.split()
+            if len(parts) < 2:
+                continue
+            try:
+                strike_num = float(parts[0])
+            except ValueError:
+                continue
+            side = parts[1]  # CE or PE
+
+            # Get current LTP for this strike
+            strike_data = chain.get(strike_num, {})
+            side_data = strike_data.get(side, {})
+            current_ltp = side_data.get("last_price", 0)
+            if current_ltp <= 0:
+                continue
+
+            # Get entry price
+            cmp_raw = primary.get("cmp_raw", 0)
+            if not cmp_raw:
+                continue
+
+            # Check time elapsed (only track after 5+ minutes)
+            sig_ts = sig.get("_ts", 0)
+            if time.time() - sig_ts < 300:
+                continue
+
+            # Calculate current P&L %
+            pnl_pct = ((current_ltp - cmp_raw) / cmp_raw) * 100
+
+            # Check if target or SL hit
+            if pnl_pct >= 35:  # ~target1 hit
+                sig["result"] = "TARGET_HIT"
+                sig["result_pnl"] = round(pnl_pct, 1)
+                sig["result_ltp"] = current_ltp
+            elif pnl_pct <= -25:  # SL hit
+                sig["result"] = "SL_HIT"
+                sig["result_pnl"] = round(pnl_pct, 1)
+                sig["result_ltp"] = current_ltp
+            elif time.time() - sig_ts > 1800:  # 30 min timeout
+                if pnl_pct > 0:
+                    sig["result"] = "TIME_EXIT_PROFIT"
+                else:
+                    sig["result"] = "TIME_EXIT_LOSS"
+                sig["result_pnl"] = round(pnl_pct, 1)
+                sig["result_ltp"] = current_ltp
+
+            # Update current LTP for live tracking
+            sig["current_ltp"] = current_ltp
+            sig["current_pnl_pct"] = round(pnl_pct, 1)
+
+    def _get_accuracy_stats(self) -> dict:
+        """Calculate overall accuracy from tracked signals."""
+        tracked = [s for s in self.signal_history if s.get("result")]
+        if not tracked:
+            return {"total": 0, "wins": 0, "losses": 0, "accuracy": 0, "avg_pnl": 0}
+        wins = sum(1 for s in tracked if s["result"] in ("TARGET_HIT", "TIME_EXIT_PROFIT"))
+        losses = sum(1 for s in tracked if s["result"] in ("SL_HIT", "TIME_EXIT_LOSS"))
+        total_pnl = sum(s.get("result_pnl", 0) for s in tracked)
+        return {
+            "total": len(tracked),
+            "wins": wins,
+            "losses": losses,
+            "accuracy": round((wins / len(tracked)) * 100, 1) if tracked else 0,
+            "avg_pnl": round(total_pnl / len(tracked), 1) if tracked else 0,
+            "best_trade": max((s.get("result_pnl", 0) for s in tracked), default=0),
+            "worst_trade": min((s.get("result_pnl", 0) for s in tracked), default=0),
+        }
 
     def _analyze_zones(self) -> dict:
         """Analyze chain OI data to find trading zones — reversal, buying, selling, trap."""
@@ -826,6 +921,10 @@ class UserAggregator:
             "zone_analysis": self._analyze_zones(),
             # Check Trades — MTF + OI setups
             "check_trades": self.check_trades,
+            # Accuracy tracking (auto-train)
+            "accuracy": self._get_accuracy_stats(),
+            # OTM trades from brain signal
+            "otm_trades": active_state.brain.get("otm_trades", []),
         }
 
 
