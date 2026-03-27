@@ -75,11 +75,29 @@ async def start_ticker(session_id: str, api_key: str, access_token: str):
         return  # Already running
 
     ticker = KiteTicker(api_key, access_token)
+
+    # Set up instant LTP push to frontend — ZERO LATENCY
+    async def on_index_tick(index_ltp: dict):
+        """Push index LTP instantly to all connected WebSocket clients."""
+        tick_msg = json.dumps({"type": "tick", "index_ltp": index_ltp}, default=str)
+        dead = set()
+        for ws in ws_clients.get(session_id, set()):
+            try:
+                await ws.send_text(tick_msg)
+            except Exception:
+                dead.add(ws)
+        if session_id in ws_clients and dead:
+            ws_clients[session_id] -= dead
+
+    ticker._on_index_tick = on_index_tick
+
     ok = await ticker.connect()
     if ok:
+        # Subscribe to index tokens immediately
+        await ticker.subscribe(KiteTicker.INDEX_TOKEN_LIST)
         await ticker.start()
         user_tickers[session_id] = ticker
-        print(f"[TRADE BRO] Ticker started for {session_id[:8]}")
+        print(f"[TRADE BRO] Ticker started for {session_id[:8]} (index tokens subscribed)")
     else:
         print(f"[TRADE BRO] Ticker failed to connect for {session_id[:8]}")
 

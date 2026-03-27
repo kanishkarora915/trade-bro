@@ -24,6 +24,15 @@ WS_URL = "wss://ws.kite.trade/"
 class KiteTicker:
     """Async Kite WebSocket ticker with binary parsing and trade detection."""
 
+    # Index instrument tokens (Kite standard)
+    INDEX_TOKENS = {
+        256: "NIFTY",       # NSE:NIFTY 50
+        260: "BANKNIFTY",   # NSE:NIFTY BANK
+        265: "SENSEX",      # BSE:SENSEX
+        264: "INDIA VIX",   # NSE:INDIA VIX
+    }
+    INDEX_TOKEN_LIST = list(INDEX_TOKENS.keys())
+
     def __init__(self, api_key: str, access_token: str):
         self.api_key = api_key
         self.access_token = access_token
@@ -39,6 +48,10 @@ class KiteTicker:
         self.trade_log: list[dict] = []              # detected large trades
         self.sweep_events: list[dict] = []           # detected sweeps
         self.flow_data: dict[int, dict] = {}         # token → {buy_qty, sell_qty, buy_pct, volume}
+
+        # INSTANT LTP: index prices updated on every tick (~200ms)
+        self.index_ltp: dict[str, dict] = {}  # "NIFTY" → {ltp, open, high, low, close, change, ts}
+        self._on_index_tick = None  # callback: async fn(index_ltp_dict) — called on every index tick
 
         # Internal tracking
         self._prev_volumes: dict[int, int] = {}      # token → previous volume (for delta)
@@ -106,7 +119,9 @@ class KiteTicker:
                     if not ok:
                         await asyncio.sleep(5)
                         continue
-                    # Re-subscribe to known tokens
+                    # Always subscribe to index tokens first (for instant LTP)
+                    await self.subscribe(self.INDEX_TOKEN_LIST)
+                    # Re-subscribe to known option tokens
                     if self.token_map:
                         await self.subscribe(list(self.token_map.keys()))
 
@@ -245,6 +260,29 @@ class KiteTicker:
         """Process a tick: update stores, detect trades, sweeps, flow."""
         token = tick["token"]
         self.tick_store[token] = tick
+
+        # INSTANT INDEX LTP: if this is an index token, update immediately
+        index_name = self.INDEX_TOKENS.get(token)
+        if index_name:
+            self.index_ltp[index_name] = {
+                "ltp": tick.get("last_price", 0),
+                "open": tick.get("open", 0),
+                "high": tick.get("high", 0),
+                "low": tick.get("low", 0),
+                "close": tick.get("close", 0),
+                "change": tick.get("change", 0),
+                "ts": time.time(),
+            }
+            # Fire callback for instant push to frontend
+            if self._on_index_tick:
+                try:
+                    asyncio.get_event_loop().call_soon(
+                        lambda: asyncio.ensure_future(self._on_index_tick(self.index_ltp))
+                    )
+                except Exception:
+                    pass
+            return  # index tokens don't need option processing
+
         info = self.token_map.get(token)
         if not info:
             return

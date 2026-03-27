@@ -103,7 +103,31 @@ export function useWebSocket(sessionId: string | null) {
     }
     ws.onmessage = (ev) => {
       if (ev.data === 'pong') { setLatency(Math.round(performance.now() - pingT.current)); return }
-      try { const d = JSON.parse(ev.data); if (d.spot !== undefined) setState(d) } catch {}
+      try {
+        const d = JSON.parse(ev.data)
+        if (d.type === 'tick' && d.index_ltp) {
+          // INSTANT LTP UPDATE — merge into current state without full replace
+          setState(prev => {
+            const newSpots = { ...prev.spots }
+            const il = d.index_ltp
+            if (il.NIFTY?.ltp) newSpots.NIFTY = il.NIFTY.ltp
+            if (il.BANKNIFTY?.ltp) newSpots.BANKNIFTY = il.BANKNIFTY.ltp
+            if (il.SENSEX?.ltp) newSpots.SENSEX = il.SENSEX.ltp
+            // Update active index spot
+            const activeIdx = prev.active_index || 'NIFTY'
+            const newSpot = newSpots[activeIdx] || prev.spot
+            return {
+              ...prev,
+              spots: newSpots,
+              spot: newSpot,
+              india_vix: il['INDIA VIX']?.ltp || prev.india_vix,
+              _tick_ts: Date.now(),
+            }
+          })
+          return
+        }
+        if (d.spot !== undefined) setState(d)
+      } catch {}
     }
     ws.onclose = (ev) => {
       setConnected(false)
