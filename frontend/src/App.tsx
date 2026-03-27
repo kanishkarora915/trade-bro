@@ -182,6 +182,7 @@ export default function App() {
             lastSignal={state.last_signal}
             fiiDii={state.fii_dii}
             tickerActive={state.ticker_active}
+            state={state}
           />
         </div>
 

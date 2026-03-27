@@ -2,10 +2,11 @@ import { useState } from 'react'
 import ConfluentGauge from './ConfluentGauge'
 import type { ConfluenceResult, BrainSignal, AIAnalysis, SignalHistoryEntry, FiiDiiData } from '../hooks/useWebSocket'
 
-export default function BrainDashboard({ confluence, brain, spot, aiAnalysis, signalHistory, lastSignal, fiiDii, tickerActive }: {
+export default function BrainDashboard({ confluence, brain, spot, aiAnalysis, signalHistory, lastSignal, fiiDii, tickerActive, state }: {
   confluence: ConfluenceResult; brain: BrainSignal; spot: number
   aiAnalysis?: AIAnalysis; signalHistory?: SignalHistoryEntry[]
   lastSignal?: BrainSignal | null; fiiDii?: FiiDiiData; tickerActive?: boolean
+  state?: any
 }) {
   const [showHistory, setShowHistory] = useState(false)
   const dc = confluence.direction === 'BULLISH' ? 'text-neon-green' : confluence.direction === 'BEARISH' ? 'text-neon-red' : 'text-tb-muted'
@@ -167,6 +168,25 @@ export default function BrainDashboard({ confluence, brain, spot, aiAnalysis, si
             <span className="text-tb-muted">CMP</span><span>{displaySignal.secondary.cmp}</span>
             <span className="text-tb-muted">TARGET</span><span className="text-neon-green">{displaySignal.secondary.target}</span>
             <span className="text-tb-muted">SL</span><span className="text-neon-red">{displaySignal.secondary.stop_loss}</span>
+          </div>
+        </div>
+      )}
+
+      {/* OTM Trades — Aggressive Opportunities */}
+      {(state as any).otm_trades?.length > 0 && !isStale && (
+        <div className="border border-yellow-700/20 bg-yellow-950/10 rounded-xl p-2.5">
+          <div className="text-[9px] text-yellow-400 font-bold uppercase tracking-widest mb-1.5">🎯 OTM Opportunities (High Risk/Reward)</div>
+          <div className="space-y-1.5">
+            {(state as any).otm_trades.map((t: any, i: number) => (
+              <div key={i} className="flex items-center justify-between text-[11px] font-mono bg-black/20 rounded-lg px-2 py-1.5">
+                <span className="text-yellow-400 font-bold w-20">{t.strike}</span>
+                <span className="text-white">₹{t.cmp}</span>
+                <span className="text-green-400">T1: ₹{t.target1}</span>
+                <span className="text-green-400">T2: ₹{t.target2}</span>
+                <span className="text-red-400">SL: ₹{t.stop_loss}</span>
+                <span className={`text-[9px] px-1.5 py-0.5 rounded font-bold ${t.risk === 'HIGH' ? 'bg-red-900/40 text-red-400' : 'bg-yellow-900/40 text-yellow-400'}`}>{t.risk}</span>
+              </div>
+            ))}
           </div>
         </div>
       )}
