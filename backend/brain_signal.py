@@ -34,22 +34,11 @@ def generate(confluence: dict, detector_results: dict, data: dict) -> dict:
     if market_open or market_close:
         threshold = 100
 
-    if score < threshold or direction == "NEUTRAL":
-        return {
-            "active": False,
-            "message": f"No trade — score {score:.0f}/{threshold} threshold, {alert_count} detectors firing",
-            "score": score,
-            "direction": direction,
-            "primary": None,
-            "secondary": None,
-            "otm_trades": [],
-            "exit_rules": [],
-            "firing": confluence.get("firing", []),
-        }
-
     side = "CE" if direction == "BULLISH" else "PE"
+    if direction == "NEUTRAL":
+        side = "CE"  # default to CE for scanning
 
-    # Collect ALL candidates — ATM, ITM, and OTM
+    # Collect ALL candidates — ATM, ITM, and OTM (even when below threshold)
     atm_candidates = []
     otm_candidates = []
 
@@ -87,11 +76,43 @@ def generate(confluence: dict, detector_results: dict, data: dict) -> dict:
     atm_candidates.sort(key=lambda x: x[1], reverse=True)
     otm_candidates.sort(key=lambda x: x[1], reverse=True)
 
+    # Build OTM trades ALWAYS (even below threshold) — these are independent opportunities
+    otm_trades = []
+    for strike, heat, ltp, info in otm_candidates[:3]:
+        otm_t1 = round(ltp * 1.50, 2)
+        otm_t2 = round(ltp * 2.50, 2)
+        otm_sl = round(ltp * 0.60, 2)
+        otm_trades.append({
+            "strike": f"{int(strike)} {side}",
+            "cmp": round(ltp, 1),
+            "target1": round(otm_t1, 1),
+            "target2": round(otm_t2, 1),
+            "stop_loss": round(otm_sl, 1),
+            "heat": round(heat, 1),
+            "vol": info.get("volume", 0),
+            "oi_chg": info.get("oi_day_change", 0),
+            "risk": "HIGH" if ltp < 20 else "MEDIUM",
+        })
+
     if not atm_candidates and not otm_candidates:
         return {
             "active": False, "message": "No suitable strike found", "score": score,
             "direction": direction, "primary": None, "secondary": None,
-            "otm_trades": [], "exit_rules": [], "firing": confluence.get("firing", []),
+            "otm_trades": otm_trades, "exit_rules": [], "firing": confluence.get("firing", []),
+        }
+
+    # Below threshold — return OTM trades but no primary signal
+    if score < threshold or direction == "NEUTRAL":
+        return {
+            "active": False,
+            "message": f"No trade — score {score:.0f}/{threshold} threshold, {alert_count} detectors firing",
+            "score": score,
+            "direction": direction,
+            "primary": None,
+            "secondary": None,
+            "otm_trades": otm_trades,  # OTM always shows!
+            "exit_rules": [],
+            "firing": confluence.get("firing", []),
         }
 
     # PRIMARY: Best ATM candidate (or best OTM if no ATM)
@@ -123,24 +144,6 @@ def generate(confluence: dict, detector_results: dict, data: dict) -> dict:
             "target": f"₹{round(sec_cmp * t1_mult):.0f} (+{int((t1_mult-1)*100)}%)",
             "stop_loss": f"₹{round(sec_cmp * sl_mult):.0f} (-{int((1-sl_mult)*100)}%)",
         }
-
-    # OTM TRADES — separate aggressive section (top 3 OTM)
-    otm_trades = []
-    for strike, heat, ltp, info in otm_candidates[:3]:
-        otm_t1 = round(ltp * 1.50, 2)
-        otm_t2 = round(ltp * 2.50, 2)
-        otm_sl = round(ltp * 0.60, 2)
-        otm_trades.append({
-            "strike": f"{int(strike)} {side}",
-            "cmp": round(ltp, 1),
-            "target1": round(otm_t1, 1),
-            "target2": round(otm_t2, 1),
-            "stop_loss": round(otm_sl, 1),
-            "heat": round(heat, 1),
-            "vol": info.get("volume", 0),
-            "oi_chg": info.get("oi_day_change", 0),
-            "risk": "HIGH" if ltp < 20 else "MEDIUM",
-        })
 
     # Signal strength
     if score >= 85 and critical_count >= 4:
