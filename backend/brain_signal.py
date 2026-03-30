@@ -26,13 +26,16 @@ def generate(confluence: dict, detector_results: dict, data: dict) -> dict:
     elif alert_count >= 3:
         threshold = 30
 
-    # Time filter: only first 3 min and last 10 min blocked
+    # Time filter: block outside market hours entirely
     now = datetime.now(IST)
     h, m = now.hour, now.minute
-    market_open = (h == 9 and m < 18)
-    market_close = (h == 15 and m >= 20) or h >= 16
-    if market_open or market_close:
-        threshold = 100
+    market_active = (h == 9 and m >= 18) or (10 <= h <= 14) or (h == 15 and m < 20)
+    if not market_active:
+        return {
+            "active": False, "message": "Market closed — no signals outside 9:18-15:20 IST",
+            "score": score, "direction": direction, "primary": None, "secondary": None,
+            "otm_trades": [], "exit_rules": [], "firing": confluence.get("firing", []),
+        }
 
     side = "CE" if direction == "BULLISH" else "PE"
     if direction == "NEUTRAL":

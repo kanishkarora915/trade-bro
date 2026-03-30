@@ -65,6 +65,13 @@ def analyze_setups(chain: dict, spot: float, atm: int, zone_analysis: dict,
 
     setups = []
     now = _ist_now()
+    h, m = now.hour, now.minute
+
+    # BLOCK signals outside market hours (9:15 - 15:30 IST)
+    market_open = (h == 9 and m >= 15) or (10 <= h <= 14) or (h == 15 and m <= 30)
+    if not market_open:
+        return []
+
     strikes = sorted(chain.keys())
     if not strikes:
         return []
@@ -106,7 +113,7 @@ def analyze_setups(chain: dict, spot: float, atm: int, zone_analysis: dict,
     if support and abs(spot - support) < strike_step * 2 and winner == "BUYERS":
         ce_strike = atm
         ce = chain.get(ce_strike, {}).get("CE", {})
-        if ce and ce.get("last_price", 0) > 0:
+        if ce and ce.get("last_price", 0) >= 2:
             ltp = ce["last_price"]
             factors = {
                 "oi_concentration": (chain.get(support, {}).get("PE", {}).get("oi", 0)) / total_oi,
@@ -144,7 +151,7 @@ def analyze_setups(chain: dict, spot: float, atm: int, zone_analysis: dict,
     if resistance and abs(spot - resistance) < strike_step * 2 and winner == "SELLERS":
         pe_strike = atm
         pe = chain.get(pe_strike, {}).get("PE", {})
-        if pe and pe.get("last_price", 0) > 0:
+        if pe and pe.get("last_price", 0) >= 2:
             ltp = pe["last_price"]
             factors = {
                 "oi_concentration": (chain.get(resistance, {}).get("CE", {}).get("oi", 0)) / total_oi,
@@ -195,7 +202,7 @@ def analyze_setups(chain: dict, spot: float, atm: int, zone_analysis: dict,
         # Multiple TFs breaking out upward
         otm_ce = atm + strike_step
         ce = chain.get(otm_ce, {}).get("CE", {})
-        if ce and ce.get("last_price", 0) > 0:
+        if ce and ce.get("last_price", 0) >= 2:
             ltp = ce["last_price"]
             score = min(100, 40 + breakout_ups * 15 + bull_tfs * 5)
             setups.append({
@@ -224,7 +231,7 @@ def analyze_setups(chain: dict, spot: float, atm: int, zone_analysis: dict,
     if breakout_downs >= 2:
         otm_pe = atm - strike_step
         pe = chain.get(otm_pe, {}).get("PE", {})
-        if pe and pe.get("last_price", 0) > 0:
+        if pe and pe.get("last_price", 0) >= 2:
             ltp = pe["last_price"]
             score = min(100, 40 + breakout_downs * 15 + bear_tfs * 5)
             setups.append({
@@ -261,7 +268,7 @@ def analyze_setups(chain: dict, spot: float, atm: int, zone_analysis: dict,
         # CE short covering: CE OI decreasing + CE price increasing = bullish
         if ce_oi_chg < -50000 and ce.get("net_change", 0) > 0 and abs(s - atm) <= strike_step * 2:
             ltp = ce.get("last_price", 0)
-            if ltp > 0:
+            if ltp >= 2:
                 score = min(90, 50 + abs(ce_oi_chg) / 10000)
                 setups.append({
                     "strike": f"{int(s)} CE",
@@ -291,7 +298,7 @@ def analyze_setups(chain: dict, spot: float, atm: int, zone_analysis: dict,
         if pe_oi_chg < -50000 and pe.get("net_change", 0) < 0 and abs(s - atm) <= strike_step * 2:
             ce_atm = chain.get(atm, {}).get("CE", {})
             ltp = ce_atm.get("last_price", 0)
-            if ltp > 0:
+            if ltp >= 2:
                 score = min(85, 45 + abs(pe_oi_chg) / 10000)
                 setups.append({
                     "strike": f"{int(atm)} CE",
@@ -351,7 +358,7 @@ def analyze_setups(chain: dict, spot: float, atm: int, zone_analysis: dict,
         side_key = "CE" if bull else "PE"
         opt = chain.get(strike_key, {}).get(side_key, {})
         ltp = opt.get("last_price", 0)
-        if ltp > 0:
+        if ltp >= 2:
             # Get firing detectors as reasons
             firing = confluence.get("firing", [])
             critical_detectors = [f for f in firing if f.get("status") in ("CRITICAL", "ALERT")]
