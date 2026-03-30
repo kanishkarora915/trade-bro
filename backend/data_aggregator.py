@@ -25,6 +25,7 @@ from detectors import ALL_DETECTORS
 from check_trades_engine import analyze_setups
 from confluence_engine import calculate
 from brain_signal import generate
+from bob_engine import generate as bob_generate
 from timeframe_engine import TimeframeEngine
 from data_store import DataStore
 from mtf_analyzer import analyze_mtf
@@ -50,6 +51,7 @@ class IndexState:
         self.confluence: dict = {"score": 0, "status": "NEUTRAL", "color": "grey", "direction": "NEUTRAL",
                                   "time_multiplier": 1, "is_expiry_day": False, "breakdown": {}, "firing": [], "timestamp": ""}
         self.brain: dict = {"active": False, "score": 0, "direction": "NEUTRAL", "primary": None, "secondary": None, "exit_rules": [], "firing": []}
+        self.bob_signal: dict = {"signal": "WAIT", "reason": "Initializing...", "gates": {}, "confluence_score": 0}
         self.strike_map: list = []
         self.raw_data: dict = {}
         self.error: str = ""
@@ -543,6 +545,20 @@ class UserAggregator:
                     state.confluence["vix_boost"] = round(vix_mult, 2)
 
                 state.brain = generate(state.confluence, state.detectors, raw)
+
+                # Bob the Buyer signal engine
+                try:
+                    state.bob_signal = bob_generate(
+                        detectors=state.detectors, chain=state.chain,
+                        spot=spot, atm=state.atm, india_vix=self.india_vix,
+                        fii_dii=self.fii_dii,
+                        time_to_expiry_mins=raw.get("time_to_expiry_mins", 60),
+                        index_id=idx, lot_size=cfg["lot"], strike_step=cfg["strike_step"],
+                        confluence_direction=state.confluence.get("direction", "NEUTRAL"),
+                    )
+                except Exception as e:
+                    state.bob_signal = {"signal": "WAIT", "reason": f"Engine error: {e}", "gates": {}, "confluence_score": 0}
+
                 state.strike_map = state.detectors.get("d06_confluence_map", {}).get("strike_map", [])
 
                 # Signal history tracking — AGGRESSIVE + ACCURACY-GATED REPEATS
@@ -929,6 +945,8 @@ class UserAggregator:
             "accuracy": self._get_accuracy_stats(),
             # OTM trades from brain signal
             "otm_trades": active_state.brain.get("otm_trades", []),
+            # Bob the Buyer
+            "bob_signal": active_state.bob_signal,
             # Expiry info
             "selected_expiry": self.selected_expiry,
         }
