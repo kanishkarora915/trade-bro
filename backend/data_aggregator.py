@@ -123,6 +123,7 @@ class UserAggregator:
         self._last_tf_short: float = 0  # last short TF refresh
         self._last_tf_long: float = 0   # last long TF refresh
         self._last_auto_save: float = 0 # last auto-save
+        self.selected_expiry: str | None = None  # user-selected expiry (None = nearest)
         self.skew_history: dict[str, list[dict]] = {k: [] for k in INDICES}
         # Gap & Trend tracking
         self.trend_data: dict[str, dict] = {}  # per-index trend info
@@ -158,7 +159,7 @@ class UserAggregator:
         except Exception:
             return self.india_vix
 
-    async def _build_chain_cached(self, index_id: str, spot: float, ttl: float = 8) -> dict:
+    async def _build_chain_cached(self, index_id: str, spot: float, ttl: float = 4) -> dict:
         now = time.time()
         key = f"chain_{index_id}"
         if key in self._cache:
@@ -166,7 +167,10 @@ class UserAggregator:
             if now - ts < ttl:
                 return data
         cfg = INDICES[index_id]
-        data = await self.kite.build_option_chain(spot, name=cfg["name"], strike_step=cfg["strike_step"], chain_range=cfg["range"])
+        data = await self.kite.build_option_chain(
+            spot, expiry=self.selected_expiry,
+            name=cfg["name"], strike_step=cfg["strike_step"], chain_range=cfg["range"]
+        )
         self._cache[key] = (now, data)
         return data
 
@@ -925,6 +929,8 @@ class UserAggregator:
             "accuracy": self._get_accuracy_stats(),
             # OTM trades from brain signal
             "otm_trades": active_state.brain.get("otm_trades", []),
+            # Expiry info
+            "selected_expiry": self.selected_expiry,
         }
 
 

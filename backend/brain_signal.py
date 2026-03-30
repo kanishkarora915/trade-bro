@@ -38,7 +38,7 @@ def generate(confluence: dict, detector_results: dict, data: dict) -> dict:
     if direction == "NEUTRAL":
         side = "CE"  # default to CE for scanning
 
-    # Collect ALL candidates — ATM, ITM, and OTM (even when below threshold)
+    # Collect ALL candidates — ATM and OTM only (skip ITM completely)
     atm_candidates = []
     otm_candidates = []
 
@@ -52,6 +52,15 @@ def generate(confluence: dict, detector_results: dict, data: dict) -> dict:
         oi = info.get("oi", 0)
         oi_chg = info.get("oi_day_change", 0)
         bp = info.get("buy_pct", 0.5)
+
+        # Proper ITM/OTM classification based on moneyness
+        # CE: ITM if strike < spot, OTM if strike > spot
+        # PE: ITM if strike > spot, OTM if strike < spot
+        is_itm = (side == "CE" and strike < spot) or (side == "PE" and strike > spot)
+
+        # Skip ITM options entirely — we only want ATM and OTM signals
+        if is_itm and abs(strike - atm) > step:
+            continue
 
         # Skip deep ITM (premium > 4% of spot)
         if ltp > spot * 0.04:
@@ -67,10 +76,11 @@ def generate(confluence: dict, detector_results: dict, data: dict) -> dict:
         heat = vol_score * 0.3 + oi_score * 0.3 + bp_score * 0.2 + proximity_score * 0.2
         entry = (strike, heat, ltp, info)
 
-        # Classify: ATM (±2 strikes) vs OTM (further out)
-        if atm_dist <= 2:
+        # Classify: ATM (±1 strike from ATM) vs OTM (further OTM)
+        is_otm = (side == "CE" and strike > atm) or (side == "PE" and strike < atm)
+        if atm_dist <= 1:
             atm_candidates.append(entry)
-        elif ltp >= 2:  # OTM but not worthless
+        elif is_otm and ltp >= 2:  # True OTM only, not worthless
             otm_candidates.append(entry)
 
     atm_candidates.sort(key=lambda x: x[1], reverse=True)

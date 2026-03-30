@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useSession } from './hooks/useSession'
 import { useWebSocket, DetectorResult } from './hooks/useWebSocket'
 import { useAlerts } from './hooks/useAlerts'
@@ -27,6 +27,30 @@ export default function App() {
   const [selectedDetector, setSelectedDetector] = useState<DetectorResult | null>(null)
   const [showChain, setShowChain] = useState(false)
   const [activeTab, setActiveTab] = useState<'main' | 'flow' | 'analytics' | 'timeframes' | 'check'>('main')
+  const [expiries, setExpiries] = useState<string[]>([])
+  const [selectedExpiry, setSelectedExpiry] = useState('')
+
+  // Fetch expiry list when authenticated
+  const API = import.meta.env.VITE_API_URL || ''
+  useEffect(() => {
+    if (!sessionId) return
+    fetch(`${API}/api/expiries/${sessionId}`)
+      .then(r => r.json())
+      .then(d => {
+        if (d.expiries) setExpiries(d.expiries)
+        if (d.current) setSelectedExpiry(d.current)
+      })
+      .catch(() => {})
+  }, [sessionId, state.active_index])
+
+  const switchExpiry = (exp: string) => {
+    setSelectedExpiry(exp)
+    fetch(`${API}/api/expiry/switch`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ session_id: sessionId, expiry: exp })
+    }).catch(() => {})
+  }
 
   // Zerodha callback — NO spinner, just process silently in background
   // useSession handles the token exchange automatically
@@ -69,10 +93,23 @@ export default function App() {
             </button>
           ))}
         </div>
-        <button onClick={() => setShowChain(true)}
-          className="text-[10px] font-bold text-neon-cyan border border-neon-cyan/30 px-3 py-1 rounded-lg hover:bg-neon-cyan/10 transition-all">
-          Full Chain View
-        </button>
+        <div className="flex items-center gap-2">
+          {expiries.length > 0 && (
+            <select
+              value={selectedExpiry}
+              onChange={e => switchExpiry(e.target.value)}
+              className="text-[10px] font-bold font-mono bg-tb-bg text-neon-yellow border border-neon-yellow/30 px-2 py-1 rounded-lg cursor-pointer focus:outline-none focus:border-neon-yellow/60"
+            >
+              {expiries.map(e => (
+                <option key={e} value={e}>{e}</option>
+              ))}
+            </select>
+          )}
+          <button onClick={() => setShowChain(true)}
+            className="text-[10px] font-bold text-neon-cyan border border-neon-cyan/30 px-3 py-1 rounded-lg hover:bg-neon-cyan/10 transition-all">
+            Full Chain View
+          </button>
+        </div>
       </div>
 
       {/* TAB CONTENT */}
