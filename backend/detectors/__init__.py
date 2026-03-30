@@ -10,7 +10,6 @@ from .d09_skew_shift import detect as d09_skew_shift
 from .d10_bid_ask import detect as d10_bid_ask
 from .d11_synthetic import detect as d11_synthetic
 from .d12_greeks import detect as d12_greeks
-from .d13_news_mismatch import detect as d13_news_mismatch
 from .d14_max_pain import detect as d14_max_pain
 from .d15_correlation import detect as d15_correlation
 from .d16_vacuum import detect as d16_vacuum
@@ -29,7 +28,6 @@ ALL_DETECTORS = {
     "d10_bid_ask": d10_bid_ask,
     "d11_synthetic": d11_synthetic,
     "d12_greeks": d12_greeks,
-    "d13_news_mismatch": d13_news_mismatch,
     "d14_max_pain": d14_max_pain,
     "d15_correlation": d15_correlation,
     "d16_vacuum": d16_vacuum,

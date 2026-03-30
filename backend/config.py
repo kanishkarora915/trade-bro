@@ -60,7 +60,6 @@ DETECTOR_WEIGHTS = {
     "d10_bid_ask": 5,
     "d11_synthetic": 7,
     "d12_greeks": 6,
-    "d13_news_mismatch": 4,
     "d14_max_pain": 4,
     "d15_correlation": 3,
     "d16_vacuum": 8,
