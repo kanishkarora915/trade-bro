@@ -181,132 +181,168 @@ def generate(detectors: dict, chain: dict, spot: float, atm: int,
              india_vix: float, fii_dii: dict, time_to_expiry_mins: float,
              index_id: str = "NIFTY", lot_size: int = 75,
              strike_step: int = 50, confluence_direction: str = "NEUTRAL") -> dict:
-    """Main Bob the Buyer signal engine. Returns complete signal dict."""
+    """Main Bob the Buyer signal engine. Returns complete signal dict with ALL sections always populated."""
 
     now = datetime.now(IST)
     h, m = now.hour, now.minute
     lot_size = LOT_SIZES.get(index_id, lot_size)
-
-    # ── Market hours check ──
-    market_active = (h == 9 and m >= 18) or (10 <= h <= 14) or (h == 15 and m < 20)
-    if not market_active:
-        return {
-            "signal": "WAIT",
-            "reason": "Market closed — Bob only trades 9:18-15:20 IST",
-            "gates": {"ivr": {}, "gex": {}, "momentum": {}},
-            "accumulation": {}, "momentum_det": {},
-            "confluence_score": 0, "context": {},
-            "position": None, "conviction": "NONE",
-            "timestamp": now.isoformat(),
-        }
-
-    # Determine direction from existing confluence
     direction = confluence_direction if confluence_direction != "NEUTRAL" else "BULLISH"
     side = "CE" if direction == "BULLISH" else "PE"
 
     # ══════════════════════════════════════════
-    #  GATE 1 — IVR CHECK
+    #  ALWAYS compute all data upfront — never skip sections
     # ══════════════════════════════════════════
+
+    # GATES (always calculated)
     ivr_value, ivr_gate = _calc_ivr(chain, atm, strike_step)
     gate_ivr = {"value": ivr_value, "status": ivr_gate,
                 "detail": f"IVR {ivr_value:.0f}% — {'Premium cheap' if ivr_gate == 'GREEN' else 'Premium expensive' if ivr_gate == 'RED' else 'Moderate'}"}
 
-    if ivr_gate == "RED":
-        return _wait_result(now, "GATE 1 BLOCKED — IVR above 40%. Premium too expensive. IV crush will destroy the trade.",
-                            "IVR to drop below 40%", gate_ivr, {}, {})
-
-    # ══════════════════════════════════════════
-    #  GATE 2 — GEX STATE
-    # ══════════════════════════════════════════
     ce_gex, pe_gex, net_gex, gex_gate = _calc_gex(chain, spot, time_to_expiry_mins, lot_size)
     gate_gex = {"ce_gex": ce_gex, "pe_gex": pe_gex, "net_gex": net_gex, "status": gex_gate,
                 "detail": f"Net GEX: {net_gex:,.0f} — {'Negative = Buyer Zone' if net_gex < 0 else 'Positive = Market Pins'}"}
 
-    if gex_gate == "RED":
-        return _wait_result(now, "GATE 2 BLOCKED — Positive GEX. Dealers hedging continuously, market will pin. Bad for buyers.",
-                            "GEX to flip negative", gate_ivr, gate_gex, {})
-
-    # ══════════════════════════════════════════
-    #  GATE 3 — MOMENTUM CONFIRMATION
-    # ══════════════════════════════════════════
     mom_pass, mom_detail = _check_momentum_gate(chain, atm, direction)
     gate_mom = {"passed": mom_pass, "status": "GREEN" if mom_pass else "RED", "detail": mom_detail}
 
-    if not mom_pass:
-        return _wait_result(now, f"GATE 3 BLOCKED — {mom_detail}. Need Price + Volume + OI all increasing simultaneously.",
-                            "All 3 momentum factors to align", gate_ivr, gate_gex, gate_mom)
+    gates = {"ivr": gate_ivr, "gex": gate_gex, "momentum": gate_mom}
 
-    # ══════════════════════════════════════════
-    #  STEP 2 — ACCUMULATION DETECTORS (need 2/3)
-    # ══════════════════════════════════════════
+    # ACCUMULATION DETECTORS (always calculated)
     accum_results = {}
     accum_fired = 0
     for det_id in ACCUMULATION_DETECTORS:
         det = detectors.get(det_id, {})
         fired = _is_fired(det)
         accum_results[det_id] = {"name": det.get("name", det_id), "fired": fired,
-                                  "status": det.get("status", "NORMAL"), "metric": det.get("metric", "")}
+                                  "status": det.get("status", "NORMAL"), "metric": det.get("metric", ""),
+                                  "score": det.get("score", 0)}
         if fired:
             accum_fired += 1
 
-    if accum_fired < 2:
-        missing = [accum_results[d]["name"] for d in ACCUMULATION_DETECTORS if not accum_results[d]["fired"]]
-        return _watchlist_result(now, f"Accumulation weak — only {accum_fired}/3 fired. Need 2 minimum.",
-                                 missing, gate_ivr, gate_gex, gate_mom, accum_results, {}, 0)
-
-    # ══════════════════════════════════════════
-    #  STEP 3 — MOMENTUM DETECTORS (need 2/3)
-    # ══════════════════════════════════════════
+    # MOMENTUM DETECTORS (always calculated)
     mom_results = {}
     mom_fired = 0
     for det_id in MOMENTUM_DETECTORS:
         det = detectors.get(det_id, {})
         fired = _is_fired(det)
         mom_results[det_id] = {"name": det.get("name", det_id), "fired": fired,
-                                "status": det.get("status", "NORMAL"), "metric": det.get("metric", "")}
+                                "status": det.get("status", "NORMAL"), "metric": det.get("metric", ""),
+                                "score": det.get("score", 0)}
         if fired:
             mom_fired += 1
 
-    if mom_fired < 2:
-        missing = [mom_results[d]["name"] for d in MOMENTUM_DETECTORS if not mom_results[d]["fired"]]
-        return _watchlist_result(now, f"Momentum weak — only {mom_fired}/3 fired. Need 2 minimum.",
-                                 missing, gate_ivr, gate_gex, gate_mom, accum_results, mom_results,
-                                 accum_fired + mom_fired)
-
-    # ══════════════════════════════════════════
-    #  STEP 4 — CONFLUENCE SCORE
-    # ══════════════════════════════════════════
-    confluence = accum_fired + mom_fired  # max 6
-
-    if confluence <= 3:
-        return _wait_result(now, f"Confluence {confluence}/6 — too low. Need 5+ for BUY.",
-                            "More detectors to fire", gate_ivr, gate_gex, gate_mom)
-    if confluence == 4:
-        missing_accum = [accum_results[d]["name"] for d in ACCUMULATION_DETECTORS if not accum_results[d]["fired"]]
-        missing_mom = [mom_results[d]["name"] for d in MOMENTUM_DETECTORS if not mom_results[d]["fired"]]
-        return _watchlist_result(now, f"Confluence 4/6 — close but not enough. Watching...",
-                                 missing_accum + missing_mom, gate_ivr, gate_gex, gate_mom,
-                                 accum_results, mom_results, confluence)
-
-    # ══════════════════════════════════════════
-    #  STEP 5 — CONTEXT BOOST
-    # ══════════════════════════════════════════
+    # CONTEXT DETECTORS (always calculated)
     context = {}
     for det_id in CONTEXT_DETECTORS:
         det = detectors.get(det_id, {})
         context[det_id] = {"name": det.get("name", det_id), "fired": _is_fired(det),
-                           "status": det.get("status", "NORMAL"), "metric": det.get("metric", "")}
+                           "status": det.get("status", "NORMAL"), "metric": det.get("metric", ""),
+                           "score": det.get("score", 0)}
 
-    # D07 Trapped Seller = auto STRONG BUY
+    # D07 TRAPPED SELLER (always calculated)
     trapped = detectors.get(TRAPPED_SELLER, {})
     trapped_fired = _is_fired(trapped)
-    context[TRAPPED_SELLER] = {"name": "Trapped Seller", "fired": trapped_fired,
-                                "status": trapped.get("status", "NORMAL"), "metric": trapped.get("metric", "")}
+    context[TRAPPED_SELLER] = {"name": "Trapped Seller (D07)", "fired": trapped_fired,
+                                "status": trapped.get("status", "NORMAL"), "metric": trapped.get("metric", ""),
+                                "score": trapped.get("score", 0)}
 
+    # CONFLUENCE SCORE (always calculated)
+    confluence = accum_fired + mom_fired
+    context_fired = sum(1 for c in context.values() if c["fired"])
+
+    # FIRED LIST (always calculated)
+    fired_list = []
+    for det_id in ACCUMULATION_DETECTORS + MOMENTUM_DETECTORS:
+        r = accum_results.get(det_id) or mom_results.get(det_id, {})
+        if r.get("fired"):
+            fired_list.append(r["name"])
+
+    # Missing list
+    missing_accum = [accum_results[d]["name"] for d in ACCUMULATION_DETECTORS if not accum_results[d]["fired"]]
+    missing_mom = [mom_results[d]["name"] for d in MOMENTUM_DETECTORS if not mom_results[d]["fired"]]
+    all_missing = missing_accum + missing_mom
+
+    # Base result — ALL sections always present
+    base = {
+        "gates": gates,
+        "accumulation": accum_results,
+        "momentum_det": mom_results,
+        "context": context,
+        "confluence_score": confluence,
+        "accum_fired": accum_fired,
+        "mom_fired": mom_fired,
+        "fired": fired_list,
+        "missing": all_missing,
+        "spot": round(spot, 2),
+        "atm": atm,
+        "ivr": ivr_value,
+        "net_gex": net_gex,
+        "direction": direction,
+        "side": side,
+        "index": index_id,
+        "timestamp": now.isoformat(),
+        "position": None,
+        "conviction": "NONE",
+    }
+
+    # ══════════════════════════════════════════
+    #  SIGNAL DECISION — gates → detectors → confluence
+    # ══════════════════════════════════════════
+
+    # Market hours check
+    market_active = (h == 9 and m >= 18) or (10 <= h <= 14) or (h == 15 and m < 20)
+    if not market_active:
+        return {**base, "signal": "WAIT", "reason": "Market closed — Bob only trades 9:18-15:20 IST",
+                "watch_for": "Market to open at 9:18 AM IST"}
+
+    # Gate 1: IVR
+    if ivr_gate == "RED":
+        return {**base, "signal": "WAIT",
+                "reason": "GATE 1 BLOCKED — IVR above 40%. Premium too expensive. IV crush will destroy the trade.",
+                "watch_for": "IVR to drop below 40%"}
+
+    # Gate 2: GEX
+    if gex_gate == "RED":
+        return {**base, "signal": "WAIT",
+                "reason": "GATE 2 BLOCKED — Positive GEX. Dealers hedging continuously, market will pin. Bad for buyers.",
+                "watch_for": "GEX to flip negative"}
+
+    # Gate 3: Momentum
+    if not mom_pass:
+        return {**base, "signal": "WAIT",
+                "reason": f"GATE 3 BLOCKED — {mom_detail}. Need Price + Volume + OI all increasing simultaneously.",
+                "watch_for": "All 3 momentum factors to align"}
+
+    # Accumulation check
+    if accum_fired < 2:
+        return {**base, "signal": "WATCHLIST",
+                "reason": f"Accumulation weak — only {accum_fired}/3 fired. Need 2 minimum."}
+
+    # Momentum check
+    if mom_fired < 2:
+        return {**base, "signal": "WATCHLIST",
+                "reason": f"Momentum weak — only {mom_fired}/3 fired. Need 2 minimum."}
+
+    # Confluence check
+    if confluence <= 3:
+        return {**base, "signal": "WAIT",
+                "reason": f"Confluence {confluence}/6 — too low. Need 5+ for BUY.",
+                "watch_for": "More detectors to fire"}
+
+    if confluence == 4:
+        return {**base, "signal": "WATCHLIST",
+                "reason": f"Confluence 4/6 — close but not enough. Watching..."}
+
+    # IVR YELLOW + low confluence
+    if ivr_gate == "YELLOW" and confluence < 5:
+        return {**base, "signal": "WATCHLIST",
+                "reason": f"IVR is YELLOW (30-40%). Need confluence 5+/6 but only have {confluence}/6."}
+
+    # ══════════════════════════════════════════
+    #  BUY / STRONG BUY — all gates passed, confluence 5+
+    # ══════════════════════════════════════════
     signal_type = "STRONG BUY" if (confluence >= 6 or trapped_fired) else "BUY"
 
-    # Conviction
-    context_fired = sum(1 for c in context.values() if c["fired"])
     if trapped_fired or (confluence == 6 and context_fired >= 2):
         conviction = "MAXIMUM"
     elif confluence >= 5 and context_fired >= 1:
@@ -314,18 +350,12 @@ def generate(detectors: dict, chain: dict, spot: float, atm: int,
     else:
         conviction = "MODERATE"
 
-    # IVR YELLOW gate: need 5+/6 confluence
-    if ivr_gate == "YELLOW" and confluence < 5:
-        return _watchlist_result(now, f"IVR is YELLOW (30-40%). Need confluence 5+/6 but only have {confluence}/6.",
-                                 [], gate_ivr, gate_gex, gate_mom, accum_results, mom_results, confluence)
-
-    # ══════════════════════════════════════════
-    #  STEP 7 — PICK STRIKE + POSITION SIZING
-    # ══════════════════════════════════════════
+    # Pick strike + position sizing
     pick = _pick_strike(chain, spot, atm, direction, strike_step)
     if not pick:
-        return _wait_result(now, "No suitable strike found — all premiums below ₹5 or no OTM available.",
-                            "Liquid OTM strike with premium ≥ ₹5", gate_ivr, gate_gex, gate_mom)
+        return {**base, "signal": "WAIT",
+                "reason": "No suitable strike found — all premiums below ₹5 or no OTM available.",
+                "watch_for": "Liquid OTM strike with premium ≥ ₹5"}
 
     strike, entry, info = pick
     sl = round(entry * (1 - SL_PCT), 2)
@@ -339,14 +369,6 @@ def generate(detectors: dict, chain: dict, spot: float, atm: int,
     capital_used = entry * lot_size * lots
     max_loss = round(risk_per_lot * lots, 0)
 
-    # Fired detectors list
-    fired_list = []
-    for det_id in ACCUMULATION_DETECTORS + MOMENTUM_DETECTORS:
-        r = accum_results.get(det_id) or mom_results.get(det_id, {})
-        if r.get("fired"):
-            fired_list.append(r["name"])
-
-    # Reason
     reason_parts = [
         f"{confluence}/6 detectors confirmed — {', '.join(fired_list[:3])}.",
         f"GEX negative ({net_gex:,.0f}) = market accelerating, buyer zone.",
@@ -356,9 +378,9 @@ def generate(detectors: dict, chain: dict, spot: float, atm: int,
         reason_parts.insert(0, "TRAPPED SELLER detected — institutional short covering imminent. 80-100% premium return expected in 15-20 min.")
 
     return {
+        **base,
         "signal": signal_type,
         "instrument": index_id,
-        "direction": side,
         "strike": f"{int(strike)} {side}",
         "expiry": info.get("expiry", ""),
         "entry": round(entry, 1),
@@ -368,14 +390,8 @@ def generate(detectors: dict, chain: dict, spot: float, atm: int,
         "lots": lots,
         "capital_used": round(capital_used, 0),
         "max_loss": round(max_loss, 0),
-        "confluence_score": confluence,
         "conviction": conviction,
-        "fired": fired_list,
         "reason": " ".join(reason_parts),
-        "gates": {"ivr": gate_ivr, "gex": gate_gex, "momentum": gate_mom},
-        "accumulation": accum_results,
-        "momentum_det": mom_results,
-        "context": context,
         "position": {
             "lots": lots,
             "lot_size": lot_size,
@@ -384,37 +400,6 @@ def generate(detectors: dict, chain: dict, spot: float, atm: int,
             "risk_per_lot": round(risk_per_lot, 0),
             "sl_pct": f"{SL_PCT * 100:.0f}%",
         },
-        "spot": round(spot, 2),
-        "atm": atm,
-        "ivr": ivr_value,
-        "net_gex": net_gex,
-        "timestamp": now.isoformat(),
     }
 
 
-def _wait_result(now, reason, watch_for, gate_ivr, gate_gex, gate_mom):
-    return {
-        "signal": "WAIT",
-        "reason": reason,
-        "watch_for": watch_for,
-        "gates": {"ivr": gate_ivr, "gex": gate_gex, "momentum": gate_mom},
-        "accumulation": {}, "momentum_det": {}, "context": {},
-        "confluence_score": 0, "position": None, "conviction": "NONE",
-        "timestamp": now.isoformat(),
-    }
-
-
-def _watchlist_result(now, reason, missing, gate_ivr, gate_gex, gate_mom,
-                      accum_results, mom_results, confluence):
-    return {
-        "signal": "WATCHLIST",
-        "reason": reason,
-        "missing": missing,
-        "gates": {"ivr": gate_ivr, "gex": gate_gex, "momentum": gate_mom},
-        "accumulation": accum_results,
-        "momentum_det": mom_results,
-        "context": {},
-        "confluence_score": confluence,
-        "position": None, "conviction": "NONE",
-        "timestamp": now.isoformat(),
-    }

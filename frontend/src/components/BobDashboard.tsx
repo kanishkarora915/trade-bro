@@ -158,50 +158,97 @@ export default function BobDashboard({ state }: { state: any }) {
           </div>
         )}
 
-        {/* Accumulation + Momentum Detectors */}
-        {(Object.keys(bob.accumulation || {}).length > 0 || Object.keys(bob.momentum_det || {}).length > 0) && (
-          <div className="grid grid-cols-2 gap-3">
-            {/* Accumulation */}
-            <div className="border border-gray-800 rounded-xl p-3">
-              <p className="text-[9px] text-blue-400 uppercase tracking-widest mb-2 font-bold">Accumulation (need 2/3)</p>
-              {Object.values(bob.accumulation || {}).map((d: any, i: number) => (
-                <div key={i} className="flex items-center gap-2 py-1 text-[10px]">
-                  <span className={`w-2 h-2 rounded-full ${d.fired ? 'bg-emerald-400' : 'bg-gray-700'}`} />
-                  <span className={d.fired ? 'text-emerald-400 font-bold' : 'text-gray-600'}>{d.name}</span>
-                  {d.fired && <span className="text-gray-500 ml-auto text-[9px]">{d.status}</span>}
-                </div>
-              ))}
-            </div>
-
-            {/* Momentum */}
-            <div className="border border-gray-800 rounded-xl p-3">
-              <p className="text-[9px] text-purple-400 uppercase tracking-widest mb-2 font-bold">Momentum (need 2/3)</p>
-              {Object.values(bob.momentum_det || {}).map((d: any, i: number) => (
-                <div key={i} className="flex items-center gap-2 py-1 text-[10px]">
-                  <span className={`w-2 h-2 rounded-full ${d.fired ? 'bg-emerald-400' : 'bg-gray-700'}`} />
-                  <span className={d.fired ? 'text-emerald-400 font-bold' : 'text-gray-600'}>{d.name}</span>
-                  {d.fired && <span className="text-gray-500 ml-auto text-[9px]">{d.status}</span>}
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
-
-        {/* Context Boosters */}
-        {Object.keys(bob.context || {}).length > 0 && (
+        {/* Accumulation + Momentum Detectors — ALWAYS VISIBLE */}
+        <div className="grid grid-cols-2 gap-3">
+          {/* Accumulation */}
           <div className="border border-gray-800 rounded-xl p-3">
-            <p className="text-[9px] text-cyan-400 uppercase tracking-widest mb-2 font-bold">Context Boosters</p>
-            <div className="grid grid-cols-2 gap-1">
-              {Object.values(bob.context || {}).map((d: any, i: number) => (
-                <div key={i} className="flex items-center gap-2 py-0.5 text-[10px]">
-                  <span className={`w-1.5 h-1.5 rounded-full ${d.fired ? 'bg-cyan-400' : 'bg-gray-700'}`} />
-                  <span className={d.fired ? 'text-cyan-400' : 'text-gray-600'}>{d.name}</span>
-                  {d.metric && d.fired && <span className="text-gray-600 ml-auto text-[9px]">{d.metric}</span>}
-                </div>
-              ))}
+            <div className="flex items-center justify-between mb-2">
+              <p className="text-[9px] text-blue-400 uppercase tracking-widest font-bold">Accumulation (need 2/3)</p>
+              <span className={`text-[10px] font-black ${(bob.accum_fired || 0) >= 2 ? 'text-emerald-400' : 'text-gray-600'}`}>
+                {bob.accum_fired || 0}/3
+              </span>
             </div>
+            {Object.values(bob.accumulation || {}).map((d: any, i: number) => (
+              <div key={i} className="flex items-center gap-2 py-1.5 text-[10px] border-b border-gray-800/50 last:border-0">
+                <span className={`w-2 h-2 rounded-full shrink-0 ${d.fired ? 'bg-emerald-400 animate-pulse' : d.status === 'WATCH' ? 'bg-yellow-600' : 'bg-gray-700'}`} />
+                <span className={d.fired ? 'text-emerald-400 font-bold' : 'text-gray-500'}>{d.name}</span>
+                <span className={`ml-auto text-[9px] shrink-0 ${d.fired ? 'text-emerald-500' : 'text-gray-700'}`}>{d.status}</span>
+              </div>
+            ))}
+            {Object.keys(bob.accumulation || {}).length === 0 && (
+              <p className="text-[9px] text-gray-700 italic">No detector data yet</p>
+            )}
           </div>
-        )}
+
+          {/* Momentum */}
+          <div className="border border-gray-800 rounded-xl p-3">
+            <div className="flex items-center justify-between mb-2">
+              <p className="text-[9px] text-purple-400 uppercase tracking-widest font-bold">Momentum (need 2/3)</p>
+              <span className={`text-[10px] font-black ${(bob.mom_fired || 0) >= 2 ? 'text-emerald-400' : 'text-gray-600'}`}>
+                {bob.mom_fired || 0}/3
+              </span>
+            </div>
+            {Object.values(bob.momentum_det || {}).map((d: any, i: number) => (
+              <div key={i} className="flex items-center gap-2 py-1.5 text-[10px] border-b border-gray-800/50 last:border-0">
+                <span className={`w-2 h-2 rounded-full shrink-0 ${d.fired ? 'bg-emerald-400 animate-pulse' : d.status === 'WATCH' ? 'bg-yellow-600' : 'bg-gray-700'}`} />
+                <span className={d.fired ? 'text-emerald-400 font-bold' : 'text-gray-500'}>{d.name}</span>
+                <span className={`ml-auto text-[9px] shrink-0 ${d.fired ? 'text-emerald-500' : 'text-gray-700'}`}>{d.status}</span>
+              </div>
+            ))}
+            {Object.keys(bob.momentum_det || {}).length === 0 && (
+              <p className="text-[9px] text-gray-700 italic">No detector data yet</p>
+            )}
+          </div>
+        </div>
+
+        {/* Context Boosters — ALWAYS VISIBLE */}
+        <div className="border border-gray-800 rounded-xl p-3">
+          <div className="flex items-center justify-between mb-2">
+            <p className="text-[9px] text-cyan-400 uppercase tracking-widest font-bold">Context Boosters + Trapped Seller</p>
+            <span className="text-[10px] text-gray-600">{Object.values(bob.context || {}).filter((d: any) => d.fired).length} active</span>
+          </div>
+          <div className="grid grid-cols-2 gap-x-4 gap-y-1">
+            {Object.values(bob.context || {}).map((d: any, i: number) => (
+              <div key={i} className="flex items-center gap-2 py-1 text-[10px]">
+                <span className={`w-2 h-2 rounded-full shrink-0 ${
+                  d.name?.includes('Trapped') && d.fired ? 'bg-red-400 animate-pulse' :
+                  d.fired ? 'bg-cyan-400' : 'bg-gray-700'
+                }`} />
+                <span className={
+                  d.name?.includes('Trapped') && d.fired ? 'text-red-400 font-bold' :
+                  d.fired ? 'text-cyan-400 font-semibold' : 'text-gray-600'
+                }>{d.name}</span>
+                {d.metric && <span className="text-gray-600 ml-auto text-[9px] truncate max-w-[100px]">{d.metric}</span>}
+              </div>
+            ))}
+            {Object.keys(bob.context || {}).length === 0 && (
+              <p className="text-[9px] text-gray-700 italic col-span-2">No context data yet</p>
+            )}
+          </div>
+        </div>
+
+        {/* Confluence Summary Bar */}
+        <div className="border border-gray-800 rounded-xl p-3">
+          <div className="flex items-center justify-between mb-2">
+            <p className="text-[9px] text-emerald-600 uppercase tracking-widest font-bold">Confluence Score</p>
+            <span className={`text-lg font-black ${
+              (bob.confluence_score || 0) >= 5 ? 'text-emerald-400' :
+              (bob.confluence_score || 0) >= 4 ? 'text-yellow-400' : 'text-gray-600'
+            }`}>{bob.confluence_score || 0}/6</span>
+          </div>
+          <div className="flex gap-1">
+            {[1,2,3,4,5,6].map(n => (
+              <div key={n} className={`flex-1 h-2 rounded-full ${
+                n <= (bob.confluence_score || 0)
+                  ? ((bob.confluence_score || 0) >= 5 ? 'bg-emerald-400' : 'bg-yellow-500')
+                  : 'bg-gray-800'
+              }`} />
+            ))}
+          </div>
+          <div className="flex justify-between mt-1.5 text-[9px] text-gray-600">
+            <span>≤3 WAIT</span><span>4 WATCHLIST</span><span>5 BUY</span><span>6 STRONG BUY</span>
+          </div>
+        </div>
 
         {/* Rules — Always Visible */}
         <div className="border border-red-900/20 bg-red-950/10 rounded-xl p-3">
