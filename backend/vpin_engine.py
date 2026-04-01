@@ -236,52 +236,96 @@ class InstrumentVPIN:
 
 
 class VPINEngine:
-    """Manages VPIN across multiple instruments."""
+    """Manages VPIN: 1 Futures + 2 merged sides (CE Side, PE Side).
+
+    Architecture:
+    - NIFTY-FUT: standalone, bucket=30K (leading indicator)
+    - CE SIDE: ALL CE option ticks merged into one VPIN (bucket=10K)
+    - PE SIDE: ALL PE option ticks merged into one VPIN (bucket=10K)
+    - Individual option tokens are mapped to their side for routing.
+    """
+
+    # Virtual token IDs for merged sides
+    CE_SIDE_TOKEN = -1
+    PE_SIDE_TOKEN = -2
 
     def __init__(self):
         self.instruments: dict[int, InstrumentVPIN] = {}
+        # Map real option tokens → side for routing
+        self._option_side_map: dict[int, str] = {}  # token → "CE" or "PE"
 
-    def register(self, token: int, name: str, bucket_volume: int = 30000, window: int = 50):
-        """Register an instrument for VPIN tracking. Replaces old ATM if same side."""
-        if token in self.instruments:
-            return  # already tracking this exact token
+    def register_futures(self, token: int, name: str = "NIFTY-FUT"):
+        """Register futures instrument for standalone VPIN."""
+        if token not in self.instruments:
+            self.instruments[token] = InstrumentVPIN(token, name, bucket_volume=30000, window=50)
+            print(f"[VPIN] Registered {name} (token={token}, bucket=30000)")
 
-        # If registering a new ATM CE/PE, remove old ATM of same side
-        if " CE" in name or " PE" in name:
-            side = "CE" if " CE" in name else "PE"
-            to_remove = [t for t, inst in self.instruments.items()
-                         if f" {side}" in inst.name and "FUT" not in inst.name]
-            for t in to_remove:
-                del self.instruments[t]
-                print(f"[VPIN] Deregistered old {side} (token={t})")
+    def register_sides(self):
+        """Register merged CE Side and PE Side virtual instruments."""
+        if self.CE_SIDE_TOKEN not in self.instruments:
+            self.instruments[self.CE_SIDE_TOKEN] = InstrumentVPIN(self.CE_SIDE_TOKEN, "NIFTY CE SIDE", bucket_volume=10000, window=50)
+            print(f"[VPIN] Registered CE SIDE (merged all CE strikes, bucket=10000)")
+        if self.PE_SIDE_TOKEN not in self.instruments:
+            self.instruments[self.PE_SIDE_TOKEN] = InstrumentVPIN(self.PE_SIDE_TOKEN, "NIFTY PE SIDE", bucket_volume=10000, window=50)
+            print(f"[VPIN] Registered PE SIDE (merged all PE strikes, bucket=10000)")
 
-        self.instruments[token] = InstrumentVPIN(token, name, bucket_volume, window)
-        print(f"[VPIN] Registered {name} (token={token}, bucket={bucket_volume})")
+    def register_option_token(self, token: int, side: str):
+        """Map an option token to CE or PE side for tick routing."""
+        if side in ("CE", "PE"):
+            self._option_side_map[token] = side
 
     def process_tick(self, token: int, price: float, volume: int, oi: int = 0) -> Optional[dict]:
-        """Process a tick for a registered instrument."""
-        inst = self.instruments.get(token)
-        if not inst:
+        """Process a tick. Routes to futures directly, options to merged side."""
+        if price <= 0 or volume <= 0:
             return None
-        return inst.process_tick(price, volume, oi)
+
+        # Direct instrument (futures)
+        if token in self.instruments:
+            return self.instruments[token].process_tick(price, volume, oi)
+
+        # Option token → route to merged CE/PE side
+        side = self._option_side_map.get(token)
+        if side == "CE" and self.CE_SIDE_TOKEN in self.instruments:
+            return self.instruments[self.CE_SIDE_TOKEN].process_tick(price, volume, oi)
+        elif side == "PE" and self.PE_SIDE_TOKEN in self.instruments:
+            return self.instruments[self.PE_SIDE_TOKEN].process_tick(price, volume, oi)
+
+        return None
 
     def get_all_states(self) -> dict:
-        """Get VPIN state for all instruments."""
+        """Get VPIN state for all 3 instruments: FUT, CE Side, PE Side."""
         states = {}
         for token, inst in self.instruments.items():
             states[str(token)] = inst.get_state()
 
-        # Overall market toxicity = max VPIN across futures
+        # Market toxicity = futures VPIN (primary leading indicator)
         futures_vpins = [inst.vpin for inst in self.instruments.values()
                          if "FUT" in inst.name.upper()]
         max_vpin = max(futures_vpins) if futures_vpins else 0
         signal, advice = classify_signal(max_vpin)
+
+        # CE vs PE side comparison
+        ce_inst = self.instruments.get(self.CE_SIDE_TOKEN)
+        pe_inst = self.instruments.get(self.PE_SIDE_TOKEN)
+        ce_vpin = ce_inst.vpin if ce_inst else 0
+        pe_vpin = pe_inst.vpin if pe_inst else 0
+
+        if ce_vpin > pe_vpin + 0.1:
+            flow_bias = "CE SIDE ACTIVE — call buyers dominating"
+        elif pe_vpin > ce_vpin + 0.1:
+            flow_bias = "PE SIDE ACTIVE — put buyers dominating"
+        else:
+            flow_bias = "BALANCED — no clear side dominance"
 
         return {
             "instruments": states,
             "market_vpin": round(max_vpin, 4),
             "market_signal": signal,
             "market_advice": advice,
+            "ce_vpin": round(ce_vpin, 4),
+            "pe_vpin": round(pe_vpin, 4),
+            "flow_bias": flow_bias,
+            "option_tokens_mapped": len(self._option_side_map),
             "timestamp": datetime.now(IST).isoformat(),
         }
 

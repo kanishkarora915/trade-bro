@@ -300,7 +300,7 @@ export default function VPINDashboard({ state }: { state: any }) {
           </div>
         </div>
 
-        {/* Instrument Cards */}
+        {/* 3 Instrument Cards: FUT + CE Side + PE Side */}
         {entries.length > 0 ? (
           <div className="grid grid-cols-3 gap-3">
             {entries.map(([token, inst]) => (
@@ -311,7 +311,42 @@ export default function VPINDashboard({ state }: { state: any }) {
           <div className="border border-gray-800 rounded-xl p-8 text-center">
             <p className="text-gray-500 text-sm">Waiting for tick data...</p>
             <p className="text-[10px] text-gray-700 mt-1">VPIN activates when Kite WebSocket starts sending ticks during market hours.</p>
-            <p className="text-[10px] text-gray-700">Registered: NIFTY-FUT (bucket=30K). ATM CE/PE register after first option chain build.</p>
+            <p className="text-[10px] text-gray-700">3 channels: NIFTY-FUT (30K bucket) + CE Side (all CE merged, 10K) + PE Side (all PE merged, 10K)</p>
+          </div>
+        )}
+
+        {/* CE vs PE Flow Bias */}
+        {(vpin.ce_vpin > 0 || vpin.pe_vpin > 0) && (
+          <div className="border border-gray-800 rounded-xl p-4">
+            <div className="flex items-center justify-between mb-3">
+              <p className="text-[9px] text-blue-400 uppercase tracking-widest font-bold">CE vs PE Flow Comparison</p>
+              <span className="text-[10px] text-gray-500">{vpin.option_tokens_mapped || 0} option strikes mapped</span>
+            </div>
+            <div className="flex items-center gap-4">
+              {/* CE Bar */}
+              <div className="flex-1">
+                <div className="flex items-center justify-between mb-1">
+                  <span className="text-[10px] font-bold text-emerald-400">CE SIDE</span>
+                  <span className="text-sm font-black font-mono text-emerald-400">{((vpin.ce_vpin || 0) * 100).toFixed(1)}%</span>
+                </div>
+                <div className="h-3 bg-gray-800 rounded-full overflow-hidden">
+                  <div className="h-full bg-emerald-500 transition-all" style={{ width: `${Math.min(100, (vpin.ce_vpin || 0) * 100)}%` }} />
+                </div>
+              </div>
+              {/* vs */}
+              <span className="text-gray-600 text-xs font-bold">vs</span>
+              {/* PE Bar */}
+              <div className="flex-1">
+                <div className="flex items-center justify-between mb-1">
+                  <span className="text-[10px] font-bold text-red-400">PE SIDE</span>
+                  <span className="text-sm font-black font-mono text-red-400">{((vpin.pe_vpin || 0) * 100).toFixed(1)}%</span>
+                </div>
+                <div className="h-3 bg-gray-800 rounded-full overflow-hidden">
+                  <div className="h-full bg-red-500 transition-all" style={{ width: `${Math.min(100, (vpin.pe_vpin || 0) * 100)}%` }} />
+                </div>
+              </div>
+            </div>
+            <p className="text-[10px] text-gray-500 mt-2 text-center font-mono">{vpin.flow_bias || ''}</p>
           </div>
         )}
 

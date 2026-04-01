@@ -256,8 +256,8 @@ async def lifespan(app: FastAPI):
                     "KITE_API_KEY", "KITE_API_SECRET"])
     print(f"[TRADE BRO] Auto-Login: {'ENABLED' if env_auto else 'DISABLED (set KITE_* env vars)'}")
     # Register NIFTY futures for VPIN (index token 256 receives NIFTY 50 ticks)
-    vpin_engine.register(256, "NIFTY-FUT", bucket_volume=30000, window=50)
-    print("[TRADE BRO] VPIN engine registered NIFTY-FUT (token=256)")
+    vpin_engine.register_futures(256, "NIFTY-FUT")
+    print("[TRADE BRO] VPIN: NIFTY-FUT registered. CE/PE sides register on first chain build.")
     print("[TRADE BRO] Ready — instruments will cache on first user login")
 
     # Start auto-login scheduler

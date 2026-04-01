@@ -188,15 +188,14 @@ class UserAggregator:
             except Exception as e:
                 print(f"[AGG] Ticker subscribe error: {e}")
 
-        # Register VPIN instruments: ATM CE + ATM PE from chain (only NIFTY)
-        atm = self.indices[index_id].atm
-        if atm and index_id == "NIFTY":
-            for side_key in ("CE", "PE"):
-                info = chain.get(atm, {}).get(side_key)
-                if info and info.get("instrument_token"):
-                    token = int(info["instrument_token"])
-                    label = f"NIFTY {int(atm)} {side_key}"
-                    vpin_engine.register(token, label, bucket_volume=5000, window=50)
+        # Register ALL option tokens for VPIN side routing (merged CE/PE)
+        if index_id == "NIFTY":
+            vpin_engine.register_sides()  # ensure CE/PE side instruments exist
+            for strike, sides in chain.items():
+                for side_key in ("CE", "PE"):
+                    info = sides.get(side_key)
+                    if info and info.get("instrument_token"):
+                        vpin_engine.register_option_token(int(info["instrument_token"]), side_key)
 
     def _enrich_chain_with_ticks(self, chain: dict, index_id: str):
         if not self.ticker:
