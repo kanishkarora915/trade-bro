@@ -9,13 +9,13 @@ def _time_multiplier() -> float:
     t = h * 60 + m
 
     if 555 <= t <= 570:  # 9:15 - 9:30
-        return 1.5
+        return 1.2
     if 690 <= t <= 720:  # 11:30 - 12:00
-        return 1.3
+        return 1.1
     if 840 <= t <= 870:  # 2:00 - 2:30
-        return 1.3
+        return 1.1
     if 900 <= t <= 930:  # 3:00 - 3:30
-        return 2.0
+        return 1.3
     return 1.0
 
 
@@ -111,23 +111,25 @@ def calculate(detector_results: dict, is_expiry_day: bool = False) -> dict:
     # Normalize to 100
     normalized = (raw_score / TOTAL_MAX_POINTS) * 100
 
-    # CRITICAL detector boost — strong signals from few detectors should push score up
+    # CRITICAL detector boost — reduced to prevent score oscillation
     critical_count = sum(1 for r in detector_results.values() if r.get("status") == "CRITICAL")
     alert_count = sum(1 for r in detector_results.values() if r.get("status") in ("CRITICAL", "ALERT"))
-    if critical_count >= 3:
-        normalized = min(100, normalized * 2.5)
-    elif critical_count >= 2:
-        normalized = min(100, normalized * 2.0)
-    elif critical_count >= 1 and alert_count >= 2:
+    if critical_count >= 4:
         normalized = min(100, normalized * 1.6)
+    elif critical_count >= 3:
+        normalized = min(100, normalized * 1.4)
+    elif critical_count >= 2:
+        normalized = min(100, normalized * 1.25)
+    elif critical_count >= 1 and alert_count >= 3:
+        normalized = min(100, normalized * 1.15)
 
-    # Apply time multiplier
+    # Apply time multiplier — reduced from 2.0x max to 1.3x
     time_mult = _time_multiplier()
     normalized = min(100, normalized * time_mult)
 
-    # Expiry day bonus
+    # Expiry day bonus — reduced
     if is_expiry_day:
-        normalized = min(100, normalized * 1.5)
+        normalized = min(100, normalized * 1.2)
 
     normalized = round(normalized, 1)
 

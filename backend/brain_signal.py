@@ -1,7 +1,14 @@
-"""Brain Signal Generator v3 — aggressive signals with OTM section + accuracy tracking."""
+"""Brain Signal Generator v3 — stable signals with cooldown + OTM section + accuracy tracking."""
 from datetime import datetime, timezone, timedelta
+import time as _time
 
 IST = timezone(timedelta(hours=5, minutes=30))
+
+# Signal persistence — prevent flip-flop
+_last_signal_time: float = 0.0
+_last_signal_direction: str = ""
+_last_signal_strike: str = ""
+SIGNAL_COOLDOWN_SEC = 600  # 10 minutes minimum between signal changes
 
 
 def generate(confluence: dict, detector_results: dict, data: dict) -> dict:
@@ -17,14 +24,14 @@ def generate(confluence: dict, detector_results: dict, data: dict) -> dict:
     alert_count = sum(1 for d in detector_results.values() if d.get("status") in ("CRITICAL", "ALERT"))
     watch_count = sum(1 for d in detector_results.values() if d.get("status") in ("CRITICAL", "ALERT", "WATCH"))
 
-    # AGGRESSIVE THRESHOLD — original style, more signals
-    threshold = 35  # low base = more signals
-    if critical_count >= 3:
-        threshold = 20  # very strong = very low bar
-    elif critical_count >= 2:
-        threshold = 25
-    elif alert_count >= 3:
-        threshold = 30
+    # STABLE THRESHOLD — quality over quantity, fewer but better signals
+    threshold = 55  # higher base = only strong signals pass
+    if critical_count >= 4:
+        threshold = 40  # very strong = lower bar
+    elif critical_count >= 3:
+        threshold = 45
+    elif alert_count >= 4:
+        threshold = 50
 
     # Time filter: block outside market hours entirely
     now = datetime.now(IST)
@@ -128,6 +135,29 @@ def generate(confluence: dict, detector_results: dict, data: dict) -> dict:
             "firing": confluence.get("firing", []),
         }
 
+    # COOLDOWN: If a signal was generated recently, don't flip direction
+    global _last_signal_time, _last_signal_direction, _last_signal_strike
+    now_ts = _time.time()
+    elapsed = now_ts - _last_signal_time
+
+    if _last_signal_time > 0 and elapsed < SIGNAL_COOLDOWN_SEC:
+        # Signal already active — only allow SAME direction or significantly stronger opposite
+        if direction != _last_signal_direction:
+            # Opposite direction — need much higher score to override
+            if score < threshold + 20:
+                return {
+                    "active": True,
+                    "message": f"Holding previous {_last_signal_direction} signal — {int(SIGNAL_COOLDOWN_SEC - elapsed)}s cooldown remaining",
+                    "score": score,
+                    "direction": _last_signal_direction,
+                    "primary": None,
+                    "secondary": None,
+                    "otm_trades": otm_trades,
+                    "exit_rules": [],
+                    "firing": confluence.get("firing", []),
+                    "cooldown_remaining": int(SIGNAL_COOLDOWN_SEC - elapsed),
+                }
+
     # PRIMARY: Best ATM candidate (or best OTM if no ATM)
     primary_list = atm_candidates if atm_candidates else otm_candidates
     best_strike, _, cmp, primary_info = primary_list[0]
@@ -178,6 +208,11 @@ def generate(confluence: dict, detector_results: dict, data: dict) -> dict:
     ]
     if is_expiry:
         exit_rules.append({"rule": "Expiry", "detail": "Exit all by 3:20 PM. After 2:45 widen SL"})
+
+    # Record signal for cooldown
+    _last_signal_time = _time.time()
+    _last_signal_direction = direction
+    _last_signal_strike = f"{int(best_strike)} {side}"
 
     return {
         "active": True,

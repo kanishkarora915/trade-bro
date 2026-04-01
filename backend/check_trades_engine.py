@@ -123,7 +123,7 @@ def analyze_setups(chain: dict, spot: float, atm: int, zone_analysis: dict,
                 "near_breakout": spot > support,
             }
             score = _score_setup(factors)
-            if score >= 30:
+            if score >= 50:
                 setups.append({
                     "strike": f"{int(ce_strike)} CE",
                     "side": "CE",
@@ -161,7 +161,7 @@ def analyze_setups(chain: dict, spot: float, atm: int, zone_analysis: dict,
                 "near_breakout": spot < resistance,
             }
             score = _score_setup(factors)
-            if score >= 30:
+            if score >= 50:
                 setups.append({
                     "strike": f"{int(pe_strike)} PE",
                     "side": "PE",
@@ -393,4 +393,6 @@ def analyze_setups(chain: dict, spot: float, atm: int, zone_analysis: dict,
             seen.add(key)
             unique.append(s)
 
-    return unique[:8]  # Top 8 setups max
+    # Only return high-quality setups — score >= 50 for ACTIVE, >= 30 for WATCHING
+    quality = [s for s in unique if s["score"] >= 50 or (s["status"] == "WATCHING" and s["score"] >= 30) or s["status"] == "WARNING"]
+    return quality[:5]  # Top 5 quality setups max
