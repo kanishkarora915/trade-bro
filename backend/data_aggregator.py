@@ -188,13 +188,14 @@ class UserAggregator:
             except Exception as e:
                 print(f"[AGG] Ticker subscribe error: {e}")
 
-        # Register VPIN instruments: ATM CE + ATM PE from chain
+        # Register VPIN instruments: ATM CE + ATM PE from chain (only NIFTY)
         atm = self.indices[index_id].atm
-        if atm and index_id == "NIFTY":  # VPIN primarily for NIFTY
-            for side_key, label in [("CE", f"{index_id} ATM CE"), ("PE", f"{index_id} ATM PE")]:
+        if atm and index_id == "NIFTY":
+            for side_key in ("CE", "PE"):
                 info = chain.get(atm, {}).get(side_key)
                 if info and info.get("instrument_token"):
                     token = int(info["instrument_token"])
+                    label = f"NIFTY {int(atm)} {side_key}"
                     vpin_engine.register(token, label, bucket_volume=5000, window=50)
 
     def _enrich_chain_with_ticks(self, chain: dict, index_id: str):
@@ -558,16 +559,18 @@ class UserAggregator:
 
                 # Bob the Buyer signal engine
                 try:
+                    idx_cfg = INDICES[idx]
                     state.bob_signal = bob_generate(
                         detectors=state.detectors, chain=state.chain,
                         spot=spot, atm=state.atm, india_vix=self.india_vix,
                         fii_dii=self.fii_dii,
                         time_to_expiry_mins=raw.get("time_to_expiry_mins", 60),
-                        index_id=idx, lot_size=cfg["lot"], strike_step=cfg["strike_step"],
+                        index_id=idx, lot_size=idx_cfg["lot"], strike_step=idx_cfg["strike_step"],
                         confluence_direction=state.confluence.get("direction", "NEUTRAL"),
                     )
                 except Exception as e:
-                    state.bob_signal = {"signal": "WAIT", "reason": f"Engine error: {e}", "gates": {}, "confluence_score": 0}
+                    state.bob_signal = {"signal": "WAIT", "reason": f"Engine error: {e}", "gates": {}, "confluence_score": 0,
+                                        "accumulation": {}, "momentum_det": {}, "context": {}, "confluence_score": 0}
 
                 state.strike_map = state.detectors.get("d06_confluence_map", {}).get("strike_map", [])
 

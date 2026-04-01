@@ -242,10 +242,21 @@ class VPINEngine:
         self.instruments: dict[int, InstrumentVPIN] = {}
 
     def register(self, token: int, name: str, bucket_volume: int = 30000, window: int = 50):
-        """Register an instrument for VPIN tracking."""
-        if token not in self.instruments:
-            self.instruments[token] = InstrumentVPIN(token, name, bucket_volume, window)
-            print(f"[VPIN] Registered {name} (token={token}, bucket={bucket_volume})")
+        """Register an instrument for VPIN tracking. Replaces old ATM if same side."""
+        if token in self.instruments:
+            return  # already tracking this exact token
+
+        # If registering a new ATM CE/PE, remove old ATM of same side
+        if " CE" in name or " PE" in name:
+            side = "CE" if " CE" in name else "PE"
+            to_remove = [t for t, inst in self.instruments.items()
+                         if f" {side}" in inst.name and "FUT" not in inst.name]
+            for t in to_remove:
+                del self.instruments[t]
+                print(f"[VPIN] Deregistered old {side} (token={t})")
+
+        self.instruments[token] = InstrumentVPIN(token, name, bucket_volume, window)
+        print(f"[VPIN] Registered {name} (token={token}, bucket={bucket_volume})")
 
     def process_tick(self, token: int, price: float, volume: int, oi: int = 0) -> Optional[dict]:
         """Process a tick for a registered instrument."""
