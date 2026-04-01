@@ -26,6 +26,7 @@ from check_trades_engine import analyze_setups
 from confluence_engine import calculate
 from brain_signal import generate
 from bob_engine import generate as bob_generate
+from vpin_engine import vpin_engine
 from timeframe_engine import TimeframeEngine
 from data_store import DataStore
 from mtf_analyzer import analyze_mtf
@@ -186,6 +187,15 @@ class UserAggregator:
                 await self.ticker.subscribe(new_tokens)
             except Exception as e:
                 print(f"[AGG] Ticker subscribe error: {e}")
+
+        # Register VPIN instruments: ATM CE + ATM PE from chain
+        atm = self.indices[index_id].atm
+        if atm and index_id == "NIFTY":  # VPIN primarily for NIFTY
+            for side_key, label in [("CE", f"{index_id} ATM CE"), ("PE", f"{index_id} ATM PE")]:
+                info = chain.get(atm, {}).get(side_key)
+                if info and info.get("instrument_token"):
+                    token = int(info["instrument_token"])
+                    vpin_engine.register(token, label, bucket_volume=5000, window=50)
 
     def _enrich_chain_with_ticks(self, chain: dict, index_id: str):
         if not self.ticker:
@@ -947,6 +957,8 @@ class UserAggregator:
             "otm_trades": active_state.brain.get("otm_trades", []),
             # Bob the Buyer
             "bob_signal": active_state.bob_signal,
+            # VPIN flow toxicity
+            "vpin": vpin_engine.get_all_states(),
             # Expiry info
             "selected_expiry": self.selected_expiry,
         }

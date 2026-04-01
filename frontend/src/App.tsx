@@ -18,6 +18,7 @@ import AnalyticsDashboard from './components/AnalyticsDashboard'
 import TimeframeDashboard from './components/TimeframeDashboard'
 import CheckTrades from './components/CheckTrades'
 import BobDashboard from './components/BobDashboard'
+import VPINDashboard from './components/VPINDashboard'
 
 export default function App() {
   const { step, session, error, loading, verifyLicense, setKiteCredentials, logout } = useSession()
@@ -27,7 +28,7 @@ export default function App() {
 
   const [selectedDetector, setSelectedDetector] = useState<DetectorResult | null>(null)
   const [showChain, setShowChain] = useState(false)
-  const [activeTab, setActiveTab] = useState<'main' | 'flow' | 'analytics' | 'timeframes' | 'check' | 'bob'>('main')
+  const [activeTab, setActiveTab] = useState<'main' | 'flow' | 'analytics' | 'timeframes' | 'check' | 'bob' | 'vpin'>('main')
   const [expiries, setExpiries] = useState<string[]>([])
   const [selectedExpiry, setSelectedExpiry] = useState('')
 
@@ -70,6 +71,7 @@ export default function App() {
     { id: 'timeframes' as const, label: 'Timeframes', color: 'text-neon-yellow', bg: 'bg-neon-yellow/10' },
     { id: 'check' as const, label: 'Check Trades', color: 'text-orange-400', bg: 'bg-orange-400/10' },
     { id: 'bob' as const, label: 'Bob', color: 'text-emerald-400', bg: 'bg-emerald-400/10' },
+    { id: 'vpin' as const, label: 'VPIN', color: 'text-blue-400', bg: 'bg-blue-400/10' },
   ]
 
   return (
@@ -125,6 +127,8 @@ export default function App() {
         <CheckTrades state={state} />
       ) : activeTab === 'bob' ? (
         <BobDashboard state={state} />
+      ) : activeTab === 'vpin' ? (
+        <VPINDashboard state={state} />
       ) : (
       <>
       {/* MAIN DASHBOARD CONTENT */}

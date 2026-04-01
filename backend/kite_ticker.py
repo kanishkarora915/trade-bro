@@ -52,6 +52,7 @@ class KiteTicker:
         # INSTANT LTP: index prices updated on every tick (~200ms)
         self.index_ltp: dict[str, dict] = {}  # "NIFTY" → {ltp, open, high, low, close, change, ts}
         self._on_index_tick = None  # callback: async fn(index_ltp_dict) — called on every index tick
+        self._on_vpin_tick = None   # callback: fn(token, price, volume, oi) — called on every tick for VPIN
 
         # Internal tracking
         self._prev_volumes: dict[int, int] = {}      # token → previous volume (for delta)
@@ -260,6 +261,17 @@ class KiteTicker:
         """Process a tick: update stores, detect trades, sweeps, flow."""
         token = tick["token"]
         self.tick_store[token] = tick
+
+        # VPIN feed: every tick with price+volume goes to VPIN engine
+        if self._on_vpin_tick:
+            try:
+                price = tick.get("last_price", 0)
+                vol = tick.get("last_quantity", 0) or tick.get("volume", 0)
+                oi = tick.get("oi", 0)
+                if price > 0 and vol > 0:
+                    self._on_vpin_tick(token, price, vol, oi)
+            except Exception:
+                pass
 
         # INSTANT INDEX LTP: if this is an index token, update immediately
         index_name = self.INDEX_TOKENS.get(token)

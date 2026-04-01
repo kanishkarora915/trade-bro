@@ -17,6 +17,7 @@ from session_manager import session_mgr, UserSession
 from kite_client import KiteClient
 from kite_ticker import KiteTicker
 from data_aggregator import get_or_create_aggregator, remove_aggregator
+from vpin_engine import vpin_engine
 from config import FRONTEND_URL, PORT, REFRESH_OPTION_CHAIN_SEC, LICENSE_KEYS
 
 IST = timezone(timedelta(hours=5, minutes=30))
@@ -98,6 +99,11 @@ async def start_ticker(session_id: str, api_key: str, access_token: str):
             ws_clients[session_id] -= dead
 
     ticker._on_index_tick = on_index_tick
+
+    # VPIN feed: route all ticks to VPIN engine
+    def on_vpin_tick(token: int, price: float, volume: int, oi: int = 0):
+        vpin_engine.process_tick(token, price, volume, oi)
+    ticker._on_vpin_tick = on_vpin_tick
 
     ok = await ticker.connect()
     if ok:
@@ -249,6 +255,9 @@ async def lifespan(app: FastAPI):
                    ["KITE_USER_ID", "KITE_PASSWORD", "KITE_TOTP_SECRET",
                     "KITE_API_KEY", "KITE_API_SECRET"])
     print(f"[TRADE BRO] Auto-Login: {'ENABLED' if env_auto else 'DISABLED (set KITE_* env vars)'}")
+    # Register NIFTY futures for VPIN (index token 256 receives NIFTY 50 ticks)
+    vpin_engine.register(256, "NIFTY-FUT", bucket_volume=30000, window=50)
+    print("[TRADE BRO] VPIN engine registered NIFTY-FUT (token=256)")
     print("[TRADE BRO] Ready — instruments will cache on first user login")
 
     # Start auto-login scheduler
@@ -303,6 +312,19 @@ async def autologin(req: AutoLoginRequest):
         raise HTTPException(403, "Invalid master key")
     success, msg = await do_auto_login()
     return {"success": success, "message": msg}
+
+
+# --- VPIN ---
+@app.get("/api/vpin")
+async def get_vpin():
+    return vpin_engine.get_all_states()
+
+@app.get("/api/vpin/{token}/history")
+async def get_vpin_history(token: int):
+    history = vpin_engine.get_history(token)
+    if not history:
+        return {"token": token, "buckets": [], "count": 0}
+    return {"token": token, "buckets": history, "count": len(history)}
 
 
 # --- Debug chain ---
