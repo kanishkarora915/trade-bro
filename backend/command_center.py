@@ -99,8 +99,8 @@ def _pick_best_strike(chain: dict, spot: float, atm: int, side: str, step: int) 
 def generate(confluence: dict, detectors: dict, seller: dict, vpin: dict,
              trap: dict, dealer: dict, bob: dict, chain: dict,
              spot: float, atm: int, index_id: str = "NIFTY",
-             strike_step: int = 50) -> dict:
-    """Generate ONE unified signal from ALL sources."""
+             strike_step: int = 50, market_intel: dict | None = None) -> dict:
+    """Generate ONE unified signal from ALL sources + market intelligence."""
     global _active_trade, _last_signal_ts
 
     now = datetime.now(IST)
@@ -186,6 +186,12 @@ def generate(confluence: dict, detectors: dict, seller: dict, vpin: dict,
     ivr_status = bob.get("gates", {}).get("ivr", {}).get("status", "GREEN")
     gex_status = bob.get("gates", {}).get("gex", {}).get("status", "GREEN")
 
+    # G) Market Regime (blocker for range)
+    mi = market_intel or {}
+    regime = mi.get("regime", {}).get("regime", "UNKNOWN")
+    tradeability = mi.get("tradeability", {}).get("score", 100)
+    trade_verdict = mi.get("tradeability", {}).get("verdict", "GO")
+
     # ══════════════════════════════════════════
     #  STEP 2: Determine direction
     # ══════════════════════════════════════════
@@ -213,6 +219,9 @@ def generate(confluence: dict, detectors: dict, seller: dict, vpin: dict,
     if not market_active:
         signal = "MARKET CLOSED"
         reason = "No trading outside 9:18-15:20 IST"
+    elif trade_verdict == "AVOID":
+        signal = "WAIT"
+        reason = f"Market not tradeable ({regime}) — " + "; ".join(mi.get("tradeability", {}).get("reasons_against", [])[:2])
     elif ivr_status == "RED":
         signal = "WAIT"
         reason = "IVR too high — premium expensive, IV crush risk"
@@ -398,6 +407,7 @@ def generate(confluence: dict, detectors: dict, seller: dict, vpin: dict,
         },
         "position_monitor": position_monitor,
         "today_stats": today_stats,
+        "market_intel": mi,
         "capital": CAPITAL,
         "max_sl_pct": f"{MAX_SL_PCT * 100:.0f}%",
     }

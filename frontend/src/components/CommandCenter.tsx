@@ -33,6 +33,75 @@ export default function CommandCenter({ state }: { state: any }) {
 
       <div className="flex-1 overflow-y-auto p-4 space-y-3">
 
+        {/* MARKET INTELLIGENCE STRIP */}
+        {(() => {
+          const mi = cmd.market_intel || {}
+          const regime = mi.regime || {}
+          const theta = mi.theta || {}
+          const expiry = mi.expiry || {}
+          const trade_ok = mi.tradeability || {}
+          const regimeClr = regime.color === 'green' ? 'text-emerald-400' : regime.color === 'red' ? 'text-red-400' : regime.color === 'yellow' ? 'text-yellow-400' : regime.color === 'orange' ? 'text-orange-400' : 'text-gray-400'
+
+          return (
+            <div className="grid grid-cols-4 gap-2">
+              {/* Regime */}
+              <div className={`border rounded-xl p-2.5 ${regime.color === 'green' ? 'border-emerald-800/30 bg-emerald-950/10' : regime.color === 'red' ? 'border-red-800/30 bg-red-950/10' : regime.color === 'yellow' ? 'border-yellow-800/30 bg-yellow-950/10' : 'border-gray-800 bg-gray-900/30'}`}>
+                <p className="text-[8px] text-gray-600 uppercase">Regime</p>
+                <p className={`text-[11px] font-black ${regimeClr}`}>{regime.regime || 'UNKNOWN'}</p>
+                <p className="text-[8px] text-gray-600">{regime.range_pts ? `Range: ${regime.range_pts} pts` : ''}</p>
+              </div>
+              {/* Tradeability */}
+              <div className={`border rounded-xl p-2.5 ${trade_ok.verdict === 'GO' ? 'border-emerald-800/30 bg-emerald-950/10' : trade_ok.verdict === 'AVOID' ? 'border-red-800/30 bg-red-950/10' : 'border-yellow-800/30 bg-yellow-950/10'}`}>
+                <p className="text-[8px] text-gray-600 uppercase">Trade-ability</p>
+                <p className={`text-xl font-black font-mono ${trade_ok.verdict === 'GO' ? 'text-emerald-400' : trade_ok.verdict === 'AVOID' ? 'text-red-400' : 'text-yellow-400'}`}>{trade_ok.score || 0}</p>
+                <p className={`text-[8px] font-bold ${trade_ok.verdict === 'GO' ? 'text-emerald-400' : 'text-red-400'}`}>{trade_ok.verdict || 'GO'}</p>
+              </div>
+              {/* Theta */}
+              <div className="border border-gray-800 rounded-xl p-2.5 bg-gray-900/30">
+                <p className="text-[8px] text-gray-600 uppercase">Theta Burn</p>
+                <p className="text-[11px] font-black text-red-400 font-mono">₹{theta.theta_per_lot_min || 0}/min</p>
+                <p className="text-[8px] text-gray-600">30m: ₹{theta.burn_30min || 0}</p>
+              </div>
+              {/* Expiry */}
+              <div className={`border rounded-xl p-2.5 ${expiry.is_expiry ? 'border-red-800/30 bg-red-950/10' : 'border-gray-800 bg-gray-900/30'}`}>
+                <p className="text-[8px] text-gray-600 uppercase">Expiry</p>
+                <p className={`text-[11px] font-black ${expiry.is_expiry ? 'text-red-400' : 'text-gray-500'}`}>{expiry.mode || 'NORMAL'}</p>
+                {expiry.hours_left && <p className="text-[8px] text-gray-600">{expiry.hours_left}h left</p>}
+              </div>
+            </div>
+          )
+        })()}
+
+        {/* Regime advice */}
+        {cmd.market_intel?.regime?.buyer_advice && (
+          <div className={`text-[10px] px-3 py-1.5 rounded-lg ${
+            cmd.market_intel.tradeability?.verdict === 'AVOID' ? 'bg-red-950/20 text-red-400' :
+            cmd.market_intel.tradeability?.verdict === 'CAUTION' ? 'bg-yellow-950/20 text-yellow-400' :
+            'bg-emerald-950/10 text-emerald-400'
+          }`}>
+            {cmd.market_intel.regime.buyer_advice}
+          </div>
+        )}
+
+        {/* Theta warning */}
+        {cmd.market_intel?.theta?.warning && (
+          <div className="text-[10px] px-3 py-1.5 rounded-lg bg-red-950/20 text-red-400">
+            ⏱ {cmd.market_intel.theta.warning}
+          </div>
+        )}
+
+        {/* Expiry rules */}
+        {cmd.market_intel?.expiry?.is_expiry && (
+          <div className="border border-red-900/30 bg-red-950/10 rounded-xl p-2.5">
+            <p className="text-[8px] text-red-500 uppercase tracking-widest font-bold mb-1">Expiry Day Rules</p>
+            <div className="grid grid-cols-2 gap-0.5 text-[9px] text-red-400/70">
+              {(cmd.market_intel.expiry.rules || []).slice(0, 6).map((r: string, i: number) => (
+                <span key={i}>• {r}</span>
+              ))}
+            </div>
+          </div>
+        )}
+
         {/* MAIN SIGNAL */}
         <div className={`border-2 rounded-2xl p-5 ${
           cmd.signal === 'STRONG BUY' ? 'border-cyan-400 bg-cyan-950/20 shadow-[0_0_40px_rgba(6,182,212,0.15)]' :

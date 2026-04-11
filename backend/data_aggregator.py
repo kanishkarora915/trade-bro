@@ -31,6 +31,7 @@ from seller_footprint import analyze as seller_analyze
 from trap_detector import update_and_detect as trap_detect
 from dealer_positions import analyze as dealer_analyze
 from command_center import generate as cmd_generate
+from market_intel import analyze as intel_analyze
 from timeframe_engine import TimeframeEngine
 from data_store import DataStore
 from mtf_analyzer import analyze_mtf
@@ -61,6 +62,7 @@ class IndexState:
         self.trap_data: dict = {"traps": [], "active_traps": [], "tracking": 0}
         self.dealer_data: dict = {"panic_level": "NORMAL", "signals": []}
         self.command: dict = {"signal": "WAIT", "reason": "Initializing..."}
+        self.market_intel: dict = {"regime": {"regime": "UNKNOWN"}, "tradeability": {"score": 100, "verdict": "GO"}}
         self.strike_map: list = []
         self.raw_data: dict = {}
         self.error: str = ""
@@ -608,7 +610,19 @@ class UserAggregator:
                 except Exception as e:
                     state.dealer_data = {"panic_level": "NORMAL", "signals": [], "error": str(e)}
 
-                # Command Center — ONE unified signal from ALL sources
+                # Market Intelligence — regime + theta + expiry mode
+                try:
+                    from command_center import _active_trade
+                    state.market_intel = intel_analyze(
+                        spot=spot, chain=state.chain, atm=state.atm,
+                        time_to_expiry_mins=raw.get("time_to_expiry_mins", 60),
+                        active_trade=_active_trade,
+                        lot_size=idx_cfg["lot"],
+                    )
+                except Exception as e:
+                    state.market_intel = {"regime": {"regime": "UNKNOWN"}, "tradeability": {"score": 100, "verdict": "GO"}}
+
+                # Command Center — ONE unified signal from ALL sources + market intel
                 try:
                     state.command = cmd_generate(
                         confluence=state.confluence, detectors=state.detectors,
@@ -617,6 +631,7 @@ class UserAggregator:
                         bob=state.bob_signal, chain=state.chain,
                         spot=spot, atm=state.atm, index_id=idx,
                         strike_step=idx_cfg["strike_step"],
+                        market_intel=state.market_intel,
                     )
                 except Exception as e:
                     state.command = {"signal": "WAIT", "reason": f"Engine error: {e}"}
