@@ -28,6 +28,7 @@ from brain_signal import generate
 from bob_engine import generate as bob_generate
 from vpin_engine import vpin_engine
 from seller_footprint import analyze as seller_analyze
+from trap_detector import update_and_detect as trap_detect
 from timeframe_engine import TimeframeEngine
 from data_store import DataStore
 from mtf_analyzer import analyze_mtf
@@ -54,7 +55,8 @@ class IndexState:
                                   "time_multiplier": 1, "is_expiry_day": False, "breakdown": {}, "firing": [], "timestamp": ""}
         self.brain: dict = {"active": False, "score": 0, "direction": "NEUTRAL", "primary": None, "secondary": None, "exit_rules": [], "firing": []}
         self.bob_signal: dict = {"signal": "WAIT", "reason": "Initializing...", "gates": {}, "confluence_score": 0}
-        self.seller_footprint: dict = {"market_stance": "NO DATA", "buyer_signals": [], "strike_data": []}
+        self.seller_footprint: dict = {"stance": "NO DATA", "signals": [], "flash_alerts": []}
+        self.trap_data: dict = {"traps": [], "active_traps": [], "tracking": 0}
         self.strike_map: list = []
         self.raw_data: dict = {}
         self.error: str = ""
@@ -580,7 +582,16 @@ class UserAggregator:
                         strike_step=idx_cfg["strike_step"],
                     )
                 except Exception as e:
-                    state.seller_footprint = {"market_stance": f"Error: {e}", "buyer_signals": [], "strike_data": []}
+                    state.seller_footprint = {"stance": f"Error: {e}", "signals": [], "flash_alerts": []}
+
+                # Trap Reversal Detector — SL hunt detection
+                try:
+                    state.trap_data = trap_detect(
+                        chain=state.chain, spot=spot, atm=state.atm,
+                        strike_step=idx_cfg["strike_step"],
+                    )
+                except Exception as e:
+                    state.trap_data = {"traps": [], "active_traps": [], "tracking": 0}
 
                 state.strike_map = state.detectors.get("d06_confluence_map", {}).get("strike_map", [])
 
@@ -972,6 +983,8 @@ class UserAggregator:
             "bob_signal": active_state.bob_signal,
             # Seller Footprint
             "seller_footprint": active_state.seller_footprint,
+            # Trap Reversal Detector
+            "trap_data": active_state.trap_data,
             # VPIN flow toxicity
             "vpin": vpin_engine.get_all_states(),
             # Expiry info

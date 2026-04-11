@@ -250,6 +250,69 @@ export default function BobDashboard({ state }: { state: any }) {
           </div>
         </div>
 
+        {/* TRAP REVERSAL DETECTOR */}
+        {(() => {
+          const trap = (state as any).trap_data || { traps: [], active_traps: [], tracking: 0 }
+          return (
+            <div className="border border-purple-800/30 bg-purple-950/10 rounded-xl p-3">
+              <div className="flex items-center justify-between mb-2">
+                <p className="text-[9px] text-purple-400 uppercase tracking-widest font-bold">Trap Reversal Detector (SL Hunt Scanner)</p>
+                <span className="text-[9px] text-gray-600 font-mono">{trap.tracking} strikes tracked</span>
+              </div>
+
+              {/* Active TRAP REVERSAL signals */}
+              {trap.traps?.length > 0 ? trap.traps.map((t: any, i: number) => (
+                <div key={i} className="border-2 border-purple-500/40 bg-purple-950/30 rounded-xl p-3 mb-2 animate-pulse">
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="text-sm font-black text-purple-300">🎯 TRAP REVERSAL — {t.strike} {t.side}</span>
+                    <span className={`text-[9px] px-2 py-0.5 rounded font-bold ${t.conviction === 'HIGH' ? 'bg-purple-500/30 text-purple-300' : 'bg-yellow-900/40 text-yellow-400'}`}>{t.conviction}</span>
+                  </div>
+                  <div className="grid grid-cols-2 gap-x-6 gap-y-1 text-xs font-mono mb-2">
+                    <div className="flex justify-between"><span className="text-gray-500">ENTRY</span><span className="text-white font-bold">₹{t.entry}</span></div>
+                    <div className="flex justify-between"><span className="text-gray-500">DROP</span><span className="text-red-400">₹{t.peak} → ₹{t.bottom} ({t.drop_pct}%)</span></div>
+                    <div className="flex justify-between"><span className="text-gray-500">TARGET 1</span><span className="text-emerald-400">₹{t.target1}</span></div>
+                    <div className="flex justify-between"><span className="text-gray-500">TARGET 2</span><span className="text-emerald-400">₹{t.target2}</span></div>
+                    <div className="flex justify-between"><span className="text-gray-500">STOP LOSS</span><span className="text-red-400 font-bold">₹{t.stop_loss}</span></div>
+                    <div className="flex justify-between"><span className="text-gray-500">CONDITIONS</span><span className="text-purple-400">{t.conditions_met}</span></div>
+                  </div>
+                  <p className="text-[10px] text-gray-400 leading-relaxed">{t.detail}</p>
+                  {/* Condition badges */}
+                  <div className="flex gap-1.5 mt-2">
+                    {Object.entries(t.conditions || {}).map(([k, v]: [string, any]) => (
+                      <span key={k} className={`text-[8px] px-1.5 py-0.5 rounded font-bold ${v ? 'bg-emerald-900/40 text-emerald-400' : 'bg-gray-800 text-gray-600'}`}>
+                        {k.replace('_', ' ').toUpperCase()} {v ? '✓' : '✗'}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )) : null}
+
+              {/* Developing traps (not yet triggered) */}
+              {trap.active_traps?.length > 0 ? (
+                <div className="space-y-1">
+                  {trap.active_traps.map((t: any, i: number) => (
+                    <div key={i} className="flex items-center gap-2 py-1.5 text-[10px] border-b border-gray-800/30 last:border-0">
+                      <span className={`w-2 h-2 rounded-full shrink-0 ${
+                        t.phase === 'CONSOLIDATING' ? 'bg-yellow-400 animate-pulse' :
+                        t.phase === 'DROPPING' ? 'bg-red-400 animate-pulse' : 'bg-gray-600'
+                      }`} />
+                      <span className="text-white font-mono font-bold w-16">{t.strike} {t.side}</span>
+                      <span className={`text-[8px] px-1 py-0.5 rounded font-bold ${
+                        t.phase === 'CONSOLIDATING' ? 'bg-yellow-900/40 text-yellow-400' :
+                        t.phase === 'DROPPING' ? 'bg-red-900/40 text-red-400' :
+                        'bg-gray-800 text-gray-500'
+                      }`}>{t.phase}</span>
+                      <span className="text-gray-500 flex-1 truncate">{t.detail}</span>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="text-[9px] text-gray-700 italic">No SL hunt patterns detected. Scanning ±5 strikes from ATM every cycle...</p>
+              )}
+            </div>
+          )
+        })()}
+
         {/* Rules — Always Visible */}
         <div className="border border-red-900/20 bg-red-950/10 rounded-xl p-3">
           <p className="text-[9px] text-red-500 uppercase tracking-widest mb-1.5 font-bold">Non-Negotiable Rules</p>
