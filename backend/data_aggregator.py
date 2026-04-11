@@ -29,6 +29,8 @@ from bob_engine import generate as bob_generate
 from vpin_engine import vpin_engine
 from seller_footprint import analyze as seller_analyze
 from trap_detector import update_and_detect as trap_detect
+from dealer_positions import analyze as dealer_analyze
+from command_center import generate as cmd_generate
 from timeframe_engine import TimeframeEngine
 from data_store import DataStore
 from mtf_analyzer import analyze_mtf
@@ -57,6 +59,8 @@ class IndexState:
         self.bob_signal: dict = {"signal": "WAIT", "reason": "Initializing...", "gates": {}, "confluence_score": 0}
         self.seller_footprint: dict = {"stance": "NO DATA", "signals": [], "flash_alerts": []}
         self.trap_data: dict = {"traps": [], "active_traps": [], "tracking": 0}
+        self.dealer_data: dict = {"panic_level": "NORMAL", "signals": []}
+        self.command: dict = {"signal": "WAIT", "reason": "Initializing..."}
         self.strike_map: list = []
         self.raw_data: dict = {}
         self.error: str = ""
@@ -593,6 +597,30 @@ class UserAggregator:
                 except Exception as e:
                     state.trap_data = {"traps": [], "active_traps": [], "tracking": 0}
 
+                # Dealer Positions — panic velocity + gamma squeeze + delta reconstruction
+                try:
+                    state.dealer_data = dealer_analyze(
+                        chain=state.chain, spot=spot, atm=state.atm,
+                        strike_step=idx_cfg["strike_step"],
+                        time_to_expiry_mins=raw.get("time_to_expiry_mins", 60),
+                        lot_size=idx_cfg["lot"],
+                    )
+                except Exception as e:
+                    state.dealer_data = {"panic_level": "NORMAL", "signals": [], "error": str(e)}
+
+                # Command Center — ONE unified signal from ALL sources
+                try:
+                    state.command = cmd_generate(
+                        confluence=state.confluence, detectors=state.detectors,
+                        seller=state.seller_footprint, vpin=vpin_engine.get_all_states(),
+                        trap=state.trap_data, dealer=state.dealer_data,
+                        bob=state.bob_signal, chain=state.chain,
+                        spot=spot, atm=state.atm, index_id=idx,
+                        strike_step=idx_cfg["strike_step"],
+                    )
+                except Exception as e:
+                    state.command = {"signal": "WAIT", "reason": f"Engine error: {e}"}
+
                 state.strike_map = state.detectors.get("d06_confluence_map", {}).get("strike_map", [])
 
                 # Signal history tracking — AGGRESSIVE + ACCURACY-GATED REPEATS
@@ -985,6 +1013,10 @@ class UserAggregator:
             "seller_footprint": active_state.seller_footprint,
             # Trap Reversal Detector
             "trap_data": active_state.trap_data,
+            # Dealer Positions
+            "dealer_data": active_state.dealer_data,
+            # Command Center (ONE signal)
+            "command": active_state.command,
             # VPIN flow toxicity
             "vpin": vpin_engine.get_all_states(),
             # Expiry info

@@ -20,6 +20,8 @@ import CheckTrades from './components/CheckTrades'
 import BobDashboard from './components/BobDashboard'
 import VPINDashboard from './components/VPINDashboard'
 import SellerFootprint from './components/SellerFootprint'
+import CommandCenter from './components/CommandCenter'
+import DealerPositions from './components/DealerPositions'
 
 export default function App() {
   const { step, session, error, loading, verifyLicense, setKiteCredentials, logout } = useSession()
@@ -29,7 +31,7 @@ export default function App() {
 
   const [selectedDetector, setSelectedDetector] = useState<DetectorResult | null>(null)
   const [showChain, setShowChain] = useState(false)
-  const [activeTab, setActiveTab] = useState<'main' | 'flow' | 'analytics' | 'timeframes' | 'check' | 'bob' | 'vpin' | 'sellers'>('main')
+  const [activeTab, setActiveTab] = useState<'main' | 'flow' | 'analytics' | 'timeframes' | 'check' | 'bob' | 'vpin' | 'sellers' | 'command' | 'dealer'>('command')
   const [expiries, setExpiries] = useState<string[]>([])
   const [selectedExpiry, setSelectedExpiry] = useState('')
 
@@ -66,6 +68,8 @@ export default function App() {
 
   // Tab config
   const TABS = [
+    { id: 'command' as const, label: 'Command', color: 'text-cyan-400', bg: 'bg-cyan-400/10' },
+    { id: 'dealer' as const, label: 'Dealer', color: 'text-purple-400', bg: 'bg-purple-400/10' },
     { id: 'main' as const, label: 'Dashboard', color: 'text-white', bg: 'bg-white/10' },
     { id: 'flow' as const, label: 'Flow', color: 'text-neon-purple', bg: 'bg-neon-purple/10' },
     { id: 'analytics' as const, label: 'Analytics', color: 'text-neon-cyan', bg: 'bg-neon-cyan/10' },
@@ -133,6 +137,10 @@ export default function App() {
         <VPINDashboard state={state} />
       ) : activeTab === 'sellers' ? (
         <SellerFootprint state={state} />
+      ) : activeTab === 'command' ? (
+        <CommandCenter state={state} />
+      ) : activeTab === 'dealer' ? (
+        <DealerPositions state={state} />
       ) : (
       <>
       {/* MAIN DASHBOARD CONTENT */}
