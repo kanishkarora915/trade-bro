@@ -18,11 +18,14 @@ Max SL: 15% of premium
 Lot sizes: NIFTY=75, BANKNIFTY=30, SENSEX=20
 """
 
+import asyncio
 import time
 import json
 import os
 from datetime import datetime, timezone, timedelta
 from collections import deque
+import telegram_alerts
+import trade_tracker
 
 IST = timezone(timedelta(hours=5, minutes=30))
 
@@ -281,6 +284,19 @@ def generate(confluence: dict, detectors: dict, seller: dict, vpin: dict,
             _save_trade({**trade, "signal": signal, "reason": reason, "entry_time": now.isoformat(),
                          "votes": {"bull": bullish_votes, "bear": bearish_votes},
                          "conviction": round(conviction_total, 1)})
+
+            # Paper trade tracking
+            trade_tracker.open_trade(signal, trade, reason, conviction_total)
+
+            # Telegram alert
+            try:
+                asyncio.get_event_loop().call_soon(
+                    lambda: asyncio.ensure_future(
+                        telegram_alerts.send_buy_signal(signal, trade, reason,
+                            {"bullish": bullish_votes, "bearish": bearish_votes}, conviction_total)
+                    ))
+            except Exception:
+                pass
         else:
             signal = "WAIT"
             reason = "No suitable strike found (premium < ₹10 or no OTM available)"
@@ -298,6 +314,23 @@ def generate(confluence: dict, detectors: dict, seller: dict, vpin: dict,
         current_info = chain.get(active_strike, {}).get(active_side, {})
         current_ltp = current_info.get("last_price", 0) if current_info else 0
         pnl_pct = ((current_ltp - active_entry) / active_entry * 100) if active_entry > 0 else 0
+
+        # Auto exit tracking (paper trade)
+        if current_ltp > 0:
+            closed = trade_tracker.check_and_close(current_ltp)
+            if closed:
+                # Send Telegram exit alert
+                try:
+                    asyncio.get_event_loop().call_soon(
+                        lambda c=closed: asyncio.ensure_future(
+                            telegram_alerts.send_exit_alert(
+                                c["exit_reason"], f"{c['strike']} — Entry ₹{c['entry']} → Exit ₹{c['exit_price']}",
+                                c["exit_reason"], c["pnl_pct"]
+                            )))
+                except Exception:
+                    pass
+                if "SL" in closed["exit_reason"]:
+                    _active_trade["status"] = "SL_HIT"
 
         # Monitor ±4 strikes
         nearby = []
@@ -383,8 +416,18 @@ def generate(confluence: dict, detectors: dict, seller: dict, vpin: dict,
     #  STEP 6: Reports
     # ══════════════════════════════════════════
     today_trades = _load_today_trades()
+    tracker_report = trade_tracker.get_daily_report()
     today_stats = {
-        "total_trades": len(today_trades),
+        "total_trades": tracker_report.get("total_trades", 0),
+        "wins": tracker_report.get("wins", 0),
+        "losses": tracker_report.get("losses", 0),
+        "win_rate": tracker_report.get("win_rate", 0),
+        "total_pnl": tracker_report.get("total_pnl", 0),
+        "avg_pnl_pct": tracker_report.get("avg_pnl_pct", 0),
+        "best_trade": tracker_report.get("best_trade"),
+        "worst_trade": tracker_report.get("worst_trade"),
+        "max_drawdown": tracker_report.get("max_drawdown", 0),
+        "trades": tracker_report.get("trades", [])[-5:],
         "signals": [t.get("signal", "") for t in today_trades[-5:]],
     }
 
@@ -408,6 +451,9 @@ def generate(confluence: dict, detectors: dict, seller: dict, vpin: dict,
         "position_monitor": position_monitor,
         "today_stats": today_stats,
         "market_intel": mi,
+        "telegram_active": telegram_alerts.is_configured(),
+        "paper_trade_active": trade_tracker.get_active() is not None,
+        "weekly_report": trade_tracker.get_weekly_report(),
         "capital": CAPITAL,
         "max_sl_pct": f"{MAX_SL_PCT * 100:.0f}%",
     }

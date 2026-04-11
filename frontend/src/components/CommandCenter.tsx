@@ -250,12 +250,48 @@ export default function CommandCenter({ state }: { state: any }) {
           </div>
         )}
 
-        {/* Rules */}
+        {/* TODAY'S P&L STATS */}
+        {cmd.today_stats?.total_trades > 0 && (
+          <div className="border border-gray-800 rounded-xl p-3">
+            <div className="flex items-center justify-between mb-2">
+              <p className="text-[9px] text-gray-400 uppercase tracking-widest font-bold">Today's Performance</p>
+              <span className={`text-sm font-black font-mono ${(cmd.today_stats.total_pnl || 0) >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+                ₹{(cmd.today_stats.total_pnl || 0).toLocaleString('en-IN')}
+              </span>
+            </div>
+            <div className="grid grid-cols-5 gap-2 text-center text-[9px]">
+              <div><p className="text-gray-600">Trades</p><p className="text-white font-bold">{cmd.today_stats.total_trades}</p></div>
+              <div><p className="text-gray-600">Wins</p><p className="text-emerald-400 font-bold">{cmd.today_stats.wins || 0}</p></div>
+              <div><p className="text-gray-600">Losses</p><p className="text-red-400 font-bold">{cmd.today_stats.losses || 0}</p></div>
+              <div><p className="text-gray-600">Win Rate</p><p className="text-cyan-400 font-bold">{cmd.today_stats.win_rate || 0}%</p></div>
+              <div><p className="text-gray-600">Drawdown</p><p className="text-red-400 font-bold">₹{(cmd.today_stats.max_drawdown || 0).toLocaleString('en-IN')}</p></div>
+            </div>
+            {/* Recent trades */}
+            {cmd.today_stats.trades?.length > 0 && (
+              <div className="mt-2 space-y-0.5">
+                {cmd.today_stats.trades.slice(-3).map((t: any, i: number) => (
+                  <div key={i} className="flex items-center gap-2 text-[9px] font-mono py-0.5 border-t border-gray-900/30">
+                    <span className={t.pnl_pct > 0 ? 'text-emerald-400' : 'text-red-400'}>{t.pnl_pct > 0 ? '✅' : '❌'}</span>
+                    <span className="text-white">{t.strike}</span>
+                    <span className="text-gray-500">₹{t.entry} → ₹{t.exit_price}</span>
+                    <span className={`ml-auto font-bold ${t.pnl_pct > 0 ? 'text-emerald-400' : 'text-red-400'}`}>{t.pnl_pct > 0 ? '+' : ''}{t.pnl_pct}%</span>
+                    <span className="text-gray-600">{t.exit_reason}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Rules + Status */}
         <div className="border border-gray-800 rounded-xl p-2 text-[8px] text-gray-600 flex justify-between">
           <span>Capital: ₹10L</span>
           <span>Max SL: 15%</span>
           <span>NIFTY 75 | BN 30 | SENSEX 20</span>
-          <span>Auto-save ON</span>
+          <span>Paper Trade: ON</span>
+          <span className={cmd.telegram_active ? 'text-emerald-400' : 'text-gray-600'}>
+            Telegram: {cmd.telegram_active ? 'ON' : 'OFF'}
+          </span>
         </div>
       </div>
     </div>

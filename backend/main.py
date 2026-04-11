@@ -327,6 +327,23 @@ async def get_vpin_history(token: int):
     return {"token": token, "buckets": history, "count": len(history)}
 
 
+# --- Trade Reports ---
+@app.get("/api/reports/daily")
+async def report_daily():
+    from trade_tracker import get_daily_report
+    return get_daily_report()
+
+@app.get("/api/reports/weekly")
+async def report_weekly():
+    from trade_tracker import get_weekly_report
+    return get_weekly_report()
+
+@app.get("/api/reports/monthly")
+async def report_monthly():
+    from trade_tracker import get_monthly_report
+    return get_monthly_report()
+
+
 # --- Debug chain ---
 @app.get("/api/debug/chain")
 async def debug_chain():
