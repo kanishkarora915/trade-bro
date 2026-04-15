@@ -327,6 +327,28 @@ async def get_vpin_history(token: int):
     return {"token": token, "buckets": history, "count": len(history)}
 
 
+# --- Paper Trader ---
+@app.get("/api/paper/settings")
+async def paper_settings():
+    import paper_trader
+    return paper_trader.get_settings()
+
+@app.post("/api/paper/settings")
+async def paper_update_settings(req: Request):
+    import paper_trader
+    body = await req.json()
+    return paper_trader.update_settings(
+        capital=body.get("capital"),
+        lot_sizes=body.get("lot_sizes"),
+        max_sl_pct=body.get("max_sl_pct"),
+    )
+
+@app.get("/api/paper/report/{period}")
+async def paper_report(period: str):
+    import paper_trader
+    return paper_trader.get_report(period)
+
+
 # --- Trade Reports ---
 @app.get("/api/reports/daily")
 async def report_daily():

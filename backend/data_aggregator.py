@@ -33,6 +33,7 @@ from dealer_positions import analyze as dealer_analyze
 from command_center import generate as cmd_generate
 from market_intel import analyze as intel_analyze
 from sniper import analyze as sniper_analyze
+import paper_trader
 from timeframe_engine import TimeframeEngine
 from data_store import DataStore
 from mtf_analyzer import analyze_mtf
@@ -651,6 +652,13 @@ class UserAggregator:
                 except Exception as e:
                     state.sniper = {"phase": "SCAN", "position": None, "error": str(e)}
 
+                # Paper Trader — auto-fetch signals + update positions
+                try:
+                    paper_trader.auto_fetch_signal(state.sniper, state.command)
+                    paper_trader.update_positions(state.chain)
+                except Exception:
+                    pass
+
                 state.strike_map = state.detectors.get("d06_confluence_map", {}).get("strike_map", [])
 
                 # Signal history tracking — AGGRESSIVE + ACCURACY-GATED REPEATS
@@ -1049,6 +1057,8 @@ class UserAggregator:
             "command": active_state.command,
             # Sniper (phased position builder)
             "sniper": active_state.sniper,
+            # Paper Trader
+            "paper_trade": paper_trader.get_state(active_state.chain),
             # VPIN flow toxicity
             "vpin": vpin_engine.get_all_states(),
             # Expiry info

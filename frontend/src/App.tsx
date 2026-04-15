@@ -21,6 +21,7 @@ import SellerFootprint from './components/SellerFootprint'
 import CommandCenter from './components/CommandCenter'
 import DealerPositions from './components/DealerPositions'
 import Sniper from './components/Sniper'
+import PaperTrade from './components/PaperTrade'
 
 export default function App() {
   const { step, session, error, loading, verifyLicense, setKiteCredentials, logout } = useSession()
@@ -30,7 +31,7 @@ export default function App() {
 
   const [selectedDetector, setSelectedDetector] = useState<DetectorResult | null>(null)
   const [showChain, setShowChain] = useState(false)
-  const [activeTab, setActiveTab] = useState<'main' | 'flow' | 'analytics' | 'timeframes' | 'vpin' | 'sellers' | 'command' | 'dealer' | 'sniper'>('sniper')
+  const [activeTab, setActiveTab] = useState<'main' | 'flow' | 'analytics' | 'timeframes' | 'vpin' | 'sellers' | 'command' | 'dealer' | 'sniper' | 'paper'>('sniper')
   const [expiries, setExpiries] = useState<string[]>([])
   const [selectedExpiry, setSelectedExpiry] = useState('')
 
@@ -76,6 +77,7 @@ export default function App() {
     { id: 'timeframes' as const, label: 'Timeframes', color: 'text-neon-yellow', bg: 'bg-neon-yellow/10' },
     { id: 'vpin' as const, label: 'VPIN', color: 'text-blue-400', bg: 'bg-blue-400/10' },
     { id: 'sellers' as const, label: 'Sellers', color: 'text-orange-400', bg: 'bg-orange-400/10' },
+    { id: 'paper' as const, label: 'Paper Trade', color: 'text-emerald-400', bg: 'bg-emerald-400/10' },
   ]
 
   return (
@@ -137,6 +139,8 @@ export default function App() {
         <CommandCenter state={state} />
       ) : activeTab === 'dealer' ? (
         <DealerPositions state={state} />
+      ) : activeTab === 'paper' ? (
+        <PaperTrade state={state} />
       ) : (
       <>
       {/* MAIN DASHBOARD CONTENT */}
