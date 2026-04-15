@@ -1,24 +1,17 @@
-"""Command Center — ONE brain, ONE signal, ONE voice.
+"""Command Center v2 — ONE brain, ONE signal, ONE voice.
 
-Merges ALL data sources into a single actionable trade signal.
-No conflicting signals. Quality over quantity.
+Fixes from v1:
+1. NET votes (bull - bear) for direction — no conflicting signals
+2. IVR/GEX calculated directly (no Bob dependency)
+3. Dynamic SL from OI walls (not fixed 15%)
+4. Entry timing: pullback zone + breakout level
+5. Detailed WAIT reasons with "what needs to change"
 
-Sources merged:
-- 16 detectors (confluence score + direction)
-- Seller Footprint (OI walls, covering, writing)
-- VPIN (flow toxicity, CE vs PE bias)
-- Trap Detector (SL hunt reversal patterns)
-- Dealer Positions (panic velocity, gamma squeeze, delta flip)
-- Bob gates (IVR, GEX, momentum)
-
-Output: ONE trade with entry/exit/SL + running trade monitor + auto-save
-
-Capital: ₹10,00,000
-Max SL: 15% of premium
-Lot sizes: NIFTY=75, BANKNIFTY=30, SENSEX=20
+Capital: ₹10,00,000 | Max SL: 15% fallback | Lot sizes: NIFTY=75, BN=30, SENSEX=20
 """
 
 import asyncio
+import math
 import time
 import json
 import os
@@ -30,23 +23,170 @@ import trade_tracker
 IST = timezone(timedelta(hours=5, minutes=30))
 
 CAPITAL = 1000000
-MAX_SL_PCT = 0.15  # 15% max stoploss
+MAX_SL_PCT = 0.15
 LOT_SIZES = {"NIFTY": 75, "BANKNIFTY": 30, "SENSEX": 20}
-T1_MULT = 1.30  # +30% target 1
-T2_MULT = 1.60  # +60% target 2
+T1_MULT = 1.30
+T2_MULT = 1.60
 
 DATA_DIR = os.environ.get("DATA_DIR", os.path.join(os.path.dirname(__file__), "data"))
 
-# ── Running trade state ──
 _active_trade: dict | None = None
 _trade_history: list[dict] = []
 _position_alerts: deque = deque(maxlen=20)
 _last_signal_ts: float = 0
-SIGNAL_COOLDOWN = 600  # 10 min between new signals
+SIGNAL_COOLDOWN = 600
+
+# ── Inline IVR + GEX (no Bob dependency) ──
+def _calc_ivr(chain: dict, atm: int) -> tuple[float, str]:
+    ivs = []
+    for strike, sides in chain.items():
+        for sk in ("CE", "PE"):
+            info = sides.get(sk)
+            if info and info.get("iv", 0) > 0:
+                ivs.append(info["iv"])
+    if len(ivs) < 4:
+        return 50.0, "YELLOW"
+    atm_ce = chain.get(atm, {}).get("CE", {}).get("iv", 0)
+    atm_pe = chain.get(atm, {}).get("PE", {}).get("iv", 0)
+    current = (atm_ce + atm_pe) / 2 if (atm_ce > 0 and atm_pe > 0) else (atm_ce or atm_pe)
+    mn, mx = min(ivs), max(ivs)
+    if mx == mn:
+        return 50.0, "YELLOW"
+    ivr = max(0, min(100, ((current - mn) / (mx - mn)) * 100))
+    return round(ivr, 1), "RED" if ivr > 40 else "YELLOW" if ivr > 30 else "GREEN"
+
+def _norm_pdf(x):
+    return math.exp(-0.5 * x * x) / math.sqrt(2 * math.pi)
+
+def _calc_gex(chain: dict, spot: float, tte_mins: float, lot_size: int) -> tuple[float, str]:
+    r, T = 0.065, max(tte_mins / (365 * 24 * 60), 0.0001)
+    ce_gex = pe_gex = 0
+    for strike, sides in chain.items():
+        for sk, mult in [("CE", 1), ("PE", -1)]:
+            info = sides.get(sk)
+            if not info or info.get("iv", 0) <= 0:
+                continue
+            sigma = info["iv"] / 100
+            oi = info.get("oi", 0)
+            if oi <= 0 or sigma <= 0 or T <= 0 or spot <= 0:
+                continue
+            d1 = (math.log(spot / float(strike)) + (r + 0.5 * sigma**2) * T) / (sigma * math.sqrt(T))
+            gamma = _norm_pdf(d1) / (spot * sigma * math.sqrt(T))
+            gex = gamma * oi * lot_size * 100
+            if sk == "CE":
+                ce_gex += gex
+            else:
+                pe_gex += gex
+    net = ce_gex - pe_gex
+    return round(net, 0), "GREEN" if net < 0 else "RED"
+
+# ── Dynamic SL from OI walls ──
+def _find_dynamic_sl(chain: dict, spot: float, atm: int, side: str, step: int, entry: float) -> float:
+    """Find SL based on nearest OI wall. Fallback to 15%."""
+    if side == "CE":
+        # For CE buy: SL = PE OI wall below spot (support level)
+        best_wall = None
+        for strike in sorted(chain.keys()):
+            if strike >= atm:
+                continue
+            pe = chain[strike].get("PE", {})
+            oi = pe.get("oi", 0)
+            if oi > 50000:
+                best_wall = (strike, oi)
+        if best_wall:
+            # Premium at wall level (rough: premium drops ~3x the underlying move %)
+            drop_pct = (spot - best_wall[0]) / spot
+            sl = entry * (1 - drop_pct * 2.5)
+            return max(round(sl, 1), entry * 0.70)  # never below 30% loss
+    else:
+        # For PE buy: SL = CE OI wall above spot (resistance level)
+        best_wall = None
+        for strike in sorted(chain.keys()):
+            if strike <= atm:
+                continue
+            ce = chain[strike].get("CE", {})
+            oi = ce.get("oi", 0)
+            if oi > 50000:
+                best_wall = (strike, oi)
+                break
+        if best_wall:
+            rise_pct = (best_wall[0] - spot) / spot
+            sl = entry * (1 - rise_pct * 2.5)
+            return max(round(sl, 1), entry * 0.70)
+
+    return round(entry * (1 - MAX_SL_PCT), 1)  # fallback 15%
+
+# ── Entry timing ──
+def _calc_entry_zone(chain: dict, spot: float, atm: int, side: str, step: int, entry: float) -> dict:
+    """Calculate pullback zone and breakout level."""
+    if side == "CE":
+        # Pullback zone: nearest PE OI wall = support → buy near that
+        support = None
+        for strike in sorted(chain.keys(), reverse=True):
+            if strike >= atm:
+                continue
+            pe = chain[strike].get("PE", {})
+            if pe.get("oi", 0) > 30000:
+                support = strike
+                break
+        pullback_spot = support if support else atm - step
+        pullback_premium = round(entry * 0.90, 1)  # ~10% below current
+
+        # Breakout: nearest CE OI wall above = resistance → break above
+        resistance = None
+        for strike in sorted(chain.keys()):
+            if strike <= atm:
+                continue
+            ce = chain[strike].get("CE", {})
+            if ce.get("oi", 0) > 30000:
+                resistance = strike
+                break
+        breakout_spot = resistance if resistance else atm + step * 2
+
+        return {
+            "pullback_zone": f"₹{pullback_premium:.0f}-{round(entry * 0.95, 1):.0f}",
+            "pullback_spot": pullback_spot,
+            "pullback_reason": f"Support at {pullback_spot} (PE OI wall). Wait for dip to enter cheaper.",
+            "breakout_level": f"₹{round(entry * 1.10, 1):.0f}+",
+            "breakout_spot": breakout_spot,
+            "breakout_reason": f"If {breakout_spot} resistance breaks, momentum entry above ₹{round(entry * 1.10, 1):.0f}.",
+            "avoid_above": f"₹{round(entry * 1.25, 1):.0f}",
+            "avoid_reason": "Premium too expensive above this — risk/reward poor.",
+        }
+    else:
+        resistance = None
+        for strike in sorted(chain.keys()):
+            if strike <= atm:
+                continue
+            ce = chain[strike].get("CE", {})
+            if ce.get("oi", 0) > 30000:
+                resistance = strike
+                break
+        pullback_premium = round(entry * 0.90, 1)
+
+        support = None
+        for strike in sorted(chain.keys(), reverse=True):
+            if strike >= atm:
+                continue
+            pe = chain[strike].get("PE", {})
+            if pe.get("oi", 0) > 30000:
+                support = strike
+                break
+        breakdown_spot = support if support else atm - step * 2
+
+        return {
+            "pullback_zone": f"₹{pullback_premium:.0f}-{round(entry * 0.95, 1):.0f}",
+            "pullback_spot": resistance or atm + step,
+            "pullback_reason": f"Resistance at {resistance or atm + step}. Wait for bounce to enter cheaper.",
+            "breakout_level": f"₹{round(entry * 1.10, 1):.0f}+",
+            "breakout_spot": breakdown_spot,
+            "breakout_reason": f"If {breakdown_spot} support breaks, momentum entry.",
+            "avoid_above": f"₹{round(entry * 1.25, 1):.0f}",
+            "avoid_reason": "Premium too expensive above this.",
+        }
 
 
 def _save_trade(trade: dict):
-    """Auto-save trade to disk."""
     try:
         trades_dir = os.path.join(DATA_DIR, "command_center")
         os.makedirs(trades_dir, exist_ok=True)
@@ -59,8 +199,8 @@ def _save_trade(trade: dict):
         existing.append(trade)
         with open(path, "w") as f:
             json.dump(existing, f, default=str)
-    except Exception as e:
-        print(f"[CMD] Save error: {e}")
+    except Exception:
+        pass
 
 
 def _load_today_trades() -> list[dict]:
@@ -76,14 +216,12 @@ def _load_today_trades() -> list[dict]:
 
 
 def _pick_best_strike(chain: dict, spot: float, atm: int, side: str, step: int) -> dict | None:
-    """Pick best strike: ATM or 1 OTM, premium ≥ ₹10."""
     candidates = []
     for strike in sorted(chain.keys()):
         info = chain[strike].get(side)
         if not info or info.get("last_price", 0) < 10:
             continue
         ltp = info["last_price"]
-        # Only ATM and OTM
         if side == "CE" and strike < atm: continue
         if side == "PE" and strike > atm: continue
         dist = abs(strike - atm) / step
@@ -92,7 +230,6 @@ def _pick_best_strike(chain: dict, spot: float, atm: int, side: str, step: int) 
         oi = info.get("oi", 0)
         score = 100 - dist * 15 + min(30, vol / 5000) + min(20, oi / 50000)
         candidates.append({"strike": int(strike), "ltp": ltp, "score": score, "vol": vol, "oi": oi})
-
     if not candidates:
         return None
     candidates.sort(key=lambda x: -x["score"])
@@ -103,7 +240,7 @@ def generate(confluence: dict, detectors: dict, seller: dict, vpin: dict,
              trap: dict, dealer: dict, bob: dict, chain: dict,
              spot: float, atm: int, index_id: str = "NIFTY",
              strike_step: int = 50, market_intel: dict | None = None) -> dict:
-    """Generate ONE unified signal from ALL sources + market intelligence."""
+    """Command Center v2 — NET votes, dynamic SL, entry timing."""
     global _active_trade, _last_signal_ts
 
     now = datetime.now(IST)
@@ -111,164 +248,187 @@ def generate(confluence: dict, detectors: dict, seller: dict, vpin: dict,
     h, m = now.hour, now.minute
     lot_size = LOT_SIZES.get(index_id, 75)
 
-    # Market hours
     market_active = (h == 9 and m >= 18) or (10 <= h <= 14) or (h == 15 and m < 20)
 
     # ══════════════════════════════════════════
-    #  STEP 1: Collect votes from all sources
+    #  STEP 1: Collect votes from ALL sources
     # ══════════════════════════════════════════
-    bullish_votes = 0
-    bearish_votes = 0
+    bull = 0
+    bear = 0
     reasons_bull = []
     reasons_bear = []
-    conviction_total = 0
+    conviction = 0
 
-    # A) Confluence direction (weight: 3)
+    # A) Confluence (weight 3)
     conf_dir = confluence.get("direction", "NEUTRAL")
     conf_score = confluence.get("score", 0)
-    if conf_dir == "BULLISH" and conf_score > 40:
-        bullish_votes += 3
+    if conf_dir == "BULLISH" and conf_score > 30:
+        bull += 3
         reasons_bull.append(f"Confluence {conf_score:.0f}/100 BULLISH")
-        conviction_total += min(3, conf_score / 30)
-    elif conf_dir == "BEARISH" and conf_score > 40:
-        bearish_votes += 3
+        conviction += min(3, conf_score / 30)
+    elif conf_dir == "BEARISH" and conf_score > 30:
+        bear += 3
         reasons_bear.append(f"Confluence {conf_score:.0f}/100 BEARISH")
-        conviction_total += min(3, conf_score / 30)
+        conviction += min(3, conf_score / 30)
 
-    # B) Seller Footprint (weight: 4 — most important for buyer)
-    seller_signals = seller.get("signals", [])
-    for sig in seller_signals:
-        if sig.get("signal", "").startswith("BUY CE"):
-            bullish_votes += 4
+    # B) Seller Footprint (weight 4)
+    for sig in seller.get("signals", []):
+        s = sig.get("signal", "")
+        if "BUY CE" in s:
+            bull += 4
             reasons_bull.append(f"Sellers: {sig.get('reason', '')[:60]}")
-            conviction_total += 3 if sig.get("conviction") == "HIGH" else 2
-        elif sig.get("signal", "").startswith("BUY PE"):
-            bearish_votes += 4
+            conviction += 3 if sig.get("conviction") == "HIGH" else 2
+        elif "BUY PE" in s:
+            bear += 4
             reasons_bear.append(f"Sellers: {sig.get('reason', '')[:60]}")
-            conviction_total += 3 if sig.get("conviction") == "HIGH" else 2
-        elif "AVOID CE" in sig.get("signal", ""):
-            bearish_votes += 2
+            conviction += 3 if sig.get("conviction") == "HIGH" else 2
+        elif "AVOID CE" in s:
+            bear += 2
             reasons_bear.append("Heavy call writing — upside capped")
 
-    # C) VPIN flow bias (weight: 2)
+    # C) VPIN (weight 2)
     ce_vpin = vpin.get("ce_vpin", 0)
     pe_vpin = vpin.get("pe_vpin", 0)
     if ce_vpin > pe_vpin + 0.1:
-        bullish_votes += 2
-        reasons_bull.append(f"VPIN: CE side toxic ({ce_vpin:.0%}) — call sellers stressed")
+        bull += 2
+        reasons_bull.append(f"VPIN: CE toxic ({ce_vpin:.0%})")
     elif pe_vpin > ce_vpin + 0.1:
-        bearish_votes += 2
-        reasons_bear.append(f"VPIN: PE side toxic ({pe_vpin:.0%}) — put sellers stressed")
+        bear += 2
+        reasons_bear.append(f"VPIN: PE toxic ({pe_vpin:.0%})")
 
-    # D) Dealer Positions (weight: 5 — institutional level)
-    dealer_signals = dealer.get("signals", [])
-    for sig in dealer_signals:
-        weight = 5 if sig.get("source") == "DEALER DELTA FLIP" else 4 if sig.get("source") == "DEALER PANIC" else 3
-        if "CE" in sig.get("signal", ""):
-            bullish_votes += weight
+    # D) Dealer (weight 5)
+    for sig in dealer.get("signals", []):
+        w = 5 if sig.get("source") == "DEALER DELTA FLIP" else 4 if sig.get("source") == "DEALER PANIC" else 3
+        if "CE" in sig.get("signal", "") and "AVOID" not in sig.get("signal", ""):
+            bull += w
             reasons_bull.append(f"Dealer: {sig.get('reason', '')[:60]}")
-            conviction_total += 4 if sig.get("conviction") == "MAXIMUM" else 3
+            conviction += 4 if sig.get("conviction") == "MAXIMUM" else 3
         elif "PE" in sig.get("signal", ""):
-            bearish_votes += weight
+            bear += w
             reasons_bear.append(f"Dealer: {sig.get('reason', '')[:60]}")
-            conviction_total += 4 if sig.get("conviction") == "MAXIMUM" else 3
+            conviction += 4 if sig.get("conviction") == "MAXIMUM" else 3
 
-    # E) Trap Detector (weight: 3)
+    # E) Trap (weight 3)
     for t in trap.get("traps", []):
         if t.get("side") == "CE":
-            bullish_votes += 3
-            reasons_bull.append(f"Trap: SL hunt at {t['strike']} CE, entry ₹{t.get('entry', 0)}")
-            conviction_total += 2
+            bull += 3
+            reasons_bull.append(f"Trap reversal: {t['strike']} CE")
+            conviction += 2
         elif t.get("side") == "PE":
-            bearish_votes += 3
-            reasons_bear.append(f"Trap: SL hunt at {t['strike']} PE, entry ₹{t.get('entry', 0)}")
-            conviction_total += 2
-
-    # F) Bob gates as filter (not votes — blockers)
-    bob_blocked = bob.get("signal") == "WAIT" and "GATE" in bob.get("reason", "")
-    ivr_status = bob.get("gates", {}).get("ivr", {}).get("status", "GREEN")
-    gex_status = bob.get("gates", {}).get("gex", {}).get("status", "GREEN")
-
-    # G) Market Regime (blocker for range)
-    mi = market_intel or {}
-    regime = mi.get("regime", {}).get("regime", "UNKNOWN")
-    tradeability = mi.get("tradeability", {}).get("score", 100)
-    trade_verdict = mi.get("tradeability", {}).get("verdict", "GO")
+            bear += 3
+            reasons_bear.append(f"Trap reversal: {t['strike']} PE")
+            conviction += 2
 
     # ══════════════════════════════════════════
-    #  STEP 2: Determine direction
+    #  STEP 2: NET direction (FIX #1 — no more conflicting signals)
     # ══════════════════════════════════════════
-    total_votes = bullish_votes + bearish_votes
-    if total_votes == 0:
+    net = bull - bear  # positive = bullish, negative = bearish
+    abs_net = abs(net)
+    total_votes = bull + bear
+
+    if abs_net < 3 or total_votes == 0:
         direction = "NEUTRAL"
         strength = 0
-    elif bullish_votes > bearish_votes:
+    elif net > 0:
         direction = "BULLISH"
-        strength = bullish_votes / max(total_votes, 1)
+        strength = net / max(total_votes, 1)
     else:
         direction = "BEARISH"
-        strength = bearish_votes / max(total_votes, 1)
+        strength = abs(net) / max(total_votes, 1)
 
     side = "CE" if direction == "BULLISH" else "PE"
     reasons = reasons_bull if direction == "BULLISH" else reasons_bear
-    winning_votes = bullish_votes if direction == "BULLISH" else bearish_votes
 
     # ══════════════════════════════════════════
-    #  STEP 3: Signal decision
+    #  STEP 3: Gates (FIX #2 — direct IVR/GEX, no Bob)
+    # ══════════════════════════════════════════
+    mi = market_intel or {}
+    regime = mi.get("regime", {}).get("regime", "UNKNOWN")
+    trade_verdict = mi.get("tradeability", {}).get("verdict", "GO")
+    tte = mi.get("expiry", {}).get("time_to_expiry_mins", 60)
+
+    ivr_val, ivr_gate = _calc_ivr(chain, atm) if chain else (50, "YELLOW")
+    net_gex, gex_gate = _calc_gex(chain, spot, tte, lot_size) if chain else (0, "GREEN")
+
+    # ══════════════════════════════════════════
+    #  STEP 4: Signal decision (FIX #1 — NET based)
     # ══════════════════════════════════════════
     signal = "WAIT"
-    reason = "Insufficient confluence"
+    reason = ""
+    wait_reasons = []  # FIX #5 — all blockers
+    what_to_change = []
 
     if not market_active:
         signal = "MARKET CLOSED"
         reason = "No trading outside 9:18-15:20 IST"
-    elif trade_verdict == "AVOID":
-        signal = "WAIT"
-        reason = f"Market not tradeable ({regime}) — " + "; ".join(mi.get("tradeability", {}).get("reasons_against", [])[:2])
-    elif ivr_status == "RED":
-        signal = "WAIT"
-        reason = "IVR too high — premium expensive, IV crush risk"
-    elif direction == "NEUTRAL" or winning_votes < 5:
-        signal = "WAIT"
-        reason = f"Not enough votes — Bull {bullish_votes} vs Bear {bearish_votes}. Need 5+ on one side."
-    elif winning_votes >= 10 and conviction_total >= 8:
-        signal = "STRONG BUY"
-        reason = " | ".join(reasons[:3])
-    elif winning_votes >= 7 and conviction_total >= 5:
-        signal = "BUY"
-        reason = " | ".join(reasons[:3])
-    elif winning_votes >= 5:
-        signal = "WATCHLIST"
-        reason = f"Building — {winning_votes} votes. " + (reasons[0] if reasons else "")
+    else:
+        # Check all blockers
+        if trade_verdict == "AVOID":
+            wait_reasons.append(f"Market regime: {regime} — not tradeable")
+            what_to_change.append("Market to start trending (break out of range)")
+        if ivr_gate == "RED":
+            wait_reasons.append(f"IVR {ivr_val:.0f}% — premium too expensive, IV crush risk")
+            what_to_change.append("IVR to drop below 40% (premiums become cheaper)")
+        if gex_gate == "RED":
+            wait_reasons.append(f"GEX positive ({net_gex:,.0f}) — dealers hedging, market will pin")
+            what_to_change.append("GEX to flip negative (dealers stop hedging)")
+        if direction == "NEUTRAL":
+            wait_reasons.append(f"Direction confused — Bull {bull} vs Bear {bear} (net {net:+d})")
+            what_to_change.append("One side to dominate by 3+ votes")
+        elif abs_net < 3:
+            wait_reasons.append(f"Net too low ({net:+d}) — Bull {bull} vs Bear {bear}")
+            what_to_change.append(f"Net votes to reach +5 or -5 (currently {net:+d})")
 
-    # Cooldown check
+        if wait_reasons:
+            signal = "WAIT"
+            reason = " | ".join(wait_reasons[:3])
+        elif abs_net >= 8 and conviction >= 8 and ivr_gate != "RED":
+            signal = "STRONG BUY"
+            reason = " | ".join(reasons[:3])
+        elif abs_net >= 5 and conviction >= 5 and ivr_gate != "RED":
+            signal = "BUY"
+            reason = " | ".join(reasons[:3])
+        elif abs_net >= 3:
+            signal = "WATCHLIST"
+            reason = f"Building — net {net:+d}. " + (reasons[0] if reasons else "")
+            what_to_change.append(f"Net to reach ±5 for BUY (currently {net:+d})")
+
+    # Cooldown
     if signal in ("BUY", "STRONG BUY"):
         if now_ts - _last_signal_ts < SIGNAL_COOLDOWN and _active_trade:
             if _active_trade.get("side") != side:
                 signal = "WAIT"
-                reason = f"Cooldown — active {_active_trade['side']} trade. Wait {int(SIGNAL_COOLDOWN - (now_ts - _last_signal_ts))}s."
+                reason = f"Cooldown — active {_active_trade['side']} trade. {int(SIGNAL_COOLDOWN - (now_ts - _last_signal_ts))}s left."
 
     # ══════════════════════════════════════════
-    #  STEP 4: Pick strike + position sizing
+    #  STEP 5: Pick strike + dynamic SL + entry timing
     # ══════════════════════════════════════════
     trade = None
+    entry_zone = None
     if signal in ("BUY", "STRONG BUY") and chain:
         pick = _pick_best_strike(chain, spot, atm, side, strike_step)
         if pick:
             entry = pick["ltp"]
-            sl = round(entry * (1 - MAX_SL_PCT), 1)
+            # FIX #3: Dynamic SL from OI walls
+            sl = _find_dynamic_sl(chain, spot, atm, side, strike_step, entry)
             t1 = round(entry * T1_MULT, 1)
             t2 = round(entry * T2_MULT, 1)
             risk_per_lot = (entry - sl) * lot_size
-            max_risk = CAPITAL * 0.02  # 2% per trade
+            max_risk = CAPITAL * 0.02
             lots = max(1, int(max_risk / max(risk_per_lot, 1)))
             capital_used = entry * lot_size * lots
+
+            # FIX #4: Entry timing
+            entry_zone = _calc_entry_zone(chain, spot, atm, side, strike_step, entry)
+
+            sl_type = "OI WALL" if sl != round(entry * (1 - MAX_SL_PCT), 1) else "FIXED 15%"
 
             trade = {
                 "strike": f"{pick['strike']} {side}",
                 "side": side,
                 "entry": round(entry, 1),
                 "stop_loss": sl,
+                "sl_type": sl_type,
                 "target1": t1,
                 "target2": t2,
                 "lots": lots,
@@ -277,32 +437,30 @@ def generate(confluence: dict, detectors: dict, seller: dict, vpin: dict,
                 "max_loss": round(risk_per_lot * lots, 0),
                 "volume": pick["vol"],
                 "oi": pick["oi"],
+                "entry_zone": entry_zone,
             }
 
             _active_trade = {**trade, "entry_time": now.isoformat(), "status": "ACTIVE"}
             _last_signal_ts = now_ts
             _save_trade({**trade, "signal": signal, "reason": reason, "entry_time": now.isoformat(),
-                         "votes": {"bull": bullish_votes, "bear": bearish_votes},
-                         "conviction": round(conviction_total, 1)})
+                         "votes": {"bull": bull, "bear": bear, "net": net}, "conviction": round(conviction, 1)})
 
-            # Paper trade tracking
-            trade_tracker.open_trade(signal, trade, reason, conviction_total)
+            trade_tracker.open_trade(signal, trade, reason, conviction)
 
-            # Telegram alert
             try:
                 asyncio.get_event_loop().call_soon(
                     lambda: asyncio.ensure_future(
                         telegram_alerts.send_buy_signal(signal, trade, reason,
-                            {"bullish": bullish_votes, "bearish": bearish_votes}, conviction_total)
-                    ))
+                            {"bullish": bull, "bearish": bear}, conviction)))
             except Exception:
                 pass
         else:
             signal = "WAIT"
-            reason = "No suitable strike found (premium < ₹10 or no OTM available)"
+            reason = "No suitable strike (premium < ₹10)"
+            what_to_change.append("Wait for ATM/OTM premium ≥ ₹10")
 
     # ══════════════════════════════════════════
-    #  STEP 5: Running trade monitor (±4 strikes OI)
+    #  STEP 6: Running trade monitor
     # ══════════════════════════════════════════
     position_monitor = None
     if _active_trade and _active_trade.get("status") == "ACTIVE" and chain:
@@ -310,112 +468,75 @@ def generate(confluence: dict, detectors: dict, seller: dict, vpin: dict,
         active_side = _active_trade["side"]
         active_entry = _active_trade["entry"]
 
-        # Get current LTP of active strike
         current_info = chain.get(active_strike, {}).get(active_side, {})
         current_ltp = current_info.get("last_price", 0) if current_info else 0
         pnl_pct = ((current_ltp - active_entry) / active_entry * 100) if active_entry > 0 else 0
 
-        # Auto exit tracking (paper trade)
         if current_ltp > 0:
             closed = trade_tracker.check_and_close(current_ltp)
             if closed:
-                # Send Telegram exit alert
                 try:
                     asyncio.get_event_loop().call_soon(
                         lambda c=closed: asyncio.ensure_future(
-                            telegram_alerts.send_exit_alert(
-                                c["exit_reason"], f"{c['strike']} — Entry ₹{c['entry']} → Exit ₹{c['exit_price']}",
-                                c["exit_reason"], c["pnl_pct"]
-                            )))
+                            telegram_alerts.send_exit_alert(c["exit_reason"],
+                                f"{c['strike']} — ₹{c['entry']} → ₹{c['exit_price']}", c["exit_reason"], c["pnl_pct"])))
                 except Exception:
                     pass
                 if "SL" in closed["exit_reason"]:
                     _active_trade["status"] = "SL_HIT"
 
-        # Monitor ±4 strikes
         nearby = []
         for offset in range(-4, 5):
             check_strike = active_strike + offset * strike_step
             info = chain.get(check_strike, {}).get(active_side, {})
             if info:
                 oi_chg = info.get("oi_day_change", 0)
-                nearby.append({
-                    "strike": int(check_strike),
-                    "oi_chg": oi_chg,
-                    "ltp": info.get("last_price", 0),
-                    "is_active": offset == 0,
-                    "action": "WRITING" if oi_chg > 5000 else "COVERING" if oi_chg < -5000 else "STABLE",
-                })
+                nearby.append({"strike": int(check_strike), "oi_chg": oi_chg,
+                               "ltp": info.get("last_price", 0), "is_active": offset == 0,
+                               "action": "WRITING" if oi_chg > 5000 else "COVERING" if oi_chg < -5000 else "STABLE"})
 
-        # Detect threats to position
         alerts = []
-
-        # SL hunt warning: OI building at adjacent strikes against our position
         for n in nearby:
             if n["is_active"]: continue
-            if abs(n["strike"] - active_strike) <= strike_step * 2:
-                if n["oi_chg"] > 50000:
-                    alerts.append({
-                        "type": "SL_HUNT_RISK",
-                        "msg": f"Heavy OI building at {n['strike']} (+{n['oi_chg']:,}) — sellers positioning. SL hunt possible.",
-                        "action": f"Consider tightening SL from ₹{_active_trade['stop_loss']} to ₹{round(current_ltp * 0.92, 1)}",
-                        "severity": "HIGH",
-                    })
+            if abs(n["strike"] - active_strike) <= strike_step * 2 and n["oi_chg"] > 50000:
+                alerts.append({"type": "SL_HUNT_RISK", "severity": "HIGH",
+                               "msg": f"Heavy OI at {n['strike']} (+{n['oi_chg']:,}) — SL hunt risk",
+                               "action": f"Tighten SL to ₹{round(current_ltp * 0.92, 1)}"})
 
-        # Profit protection
         if pnl_pct > 20:
-            new_sl = round(active_entry * 1.05, 1)  # trail SL to +5% profit
-            alerts.append({
-                "type": "TRAIL_SL",
-                "msg": f"Position +{pnl_pct:.0f}% in profit. Trail SL to ₹{new_sl} (lock +5% profit).",
-                "action": f"Move SL from ₹{_active_trade['stop_loss']} → ₹{new_sl}",
-                "severity": "INFO",
-            })
+            new_sl = round(active_entry * 1.05, 1)
+            alerts.append({"type": "TRAIL_SL", "severity": "INFO",
+                           "msg": f"+{pnl_pct:.0f}% profit. Trail SL → ₹{new_sl}",
+                           "action": f"SL ₹{_active_trade['stop_loss']} → ₹{new_sl}"})
 
-        # OI unwinding at our strike = against us
         active_oi_chg = current_info.get("oi_day_change", 0) if current_info else 0
         if active_oi_chg < -30000 and pnl_pct < 0:
-            alerts.append({
-                "type": "EXIT_WARNING",
-                "msg": f"OI unwinding at your strike ({active_oi_chg:,}) and position in loss ({pnl_pct:.0f}%). Consider exiting.",
-                "action": "EXIT at market — OI moving against you",
-                "severity": "CRITICAL",
-            })
+            alerts.append({"type": "EXIT_WARNING", "severity": "CRITICAL",
+                           "msg": f"OI unwinding ({active_oi_chg:,}) + loss ({pnl_pct:.0f}%)",
+                           "action": "EXIT — OI against you"})
 
-        # Auto-close check
         if current_ltp > 0 and current_ltp <= _active_trade.get("stop_loss", 0):
-            alerts.append({
-                "type": "SL_HIT",
-                "msg": f"STOP LOSS HIT — LTP ₹{current_ltp} ≤ SL ₹{_active_trade['stop_loss']}. EXIT NOW.",
-                "action": "EXIT IMMEDIATELY",
-                "severity": "CRITICAL",
-            })
+            alerts.append({"type": "SL_HIT", "severity": "CRITICAL",
+                           "msg": f"SL HIT — ₹{current_ltp} ≤ ₹{_active_trade['stop_loss']}",
+                           "action": "EXIT NOW"})
             _active_trade["status"] = "SL_HIT"
 
         if current_ltp >= _active_trade.get("target1", 999999) and _active_trade.get("status") == "ACTIVE":
-            alerts.append({
-                "type": "T1_HIT",
-                "msg": f"TARGET 1 HIT — LTP ₹{current_ltp} ≥ T1 ₹{_active_trade['target1']}. Book 50% profit.",
-                "action": "SELL 50% — hold rest for T2",
-                "severity": "INFO",
-            })
+            alerts.append({"type": "T1_HIT", "severity": "INFO",
+                           "msg": f"T1 HIT — ₹{current_ltp} ≥ ₹{_active_trade['target1']}",
+                           "action": "Book 50%, hold rest for T2"})
 
         _position_alerts.extend(alerts)
-
         position_monitor = {
-            "active_trade": _active_trade,
-            "current_ltp": round(current_ltp, 1),
+            "active_trade": _active_trade, "current_ltp": round(current_ltp, 1),
             "pnl_pct": round(pnl_pct, 1),
             "pnl_abs": round((current_ltp - active_entry) * lot_size * _active_trade.get("lots", 1), 0),
-            "nearby_strikes": nearby,
-            "alerts": alerts,
-            "all_alerts": list(_position_alerts)[-10:],
+            "nearby_strikes": nearby, "alerts": alerts, "all_alerts": list(_position_alerts)[-10:],
         }
 
     # ══════════════════════════════════════════
-    #  STEP 6: Reports
+    #  STEP 7: Reports
     # ══════════════════════════════════════════
-    today_trades = _load_today_trades()
     tracker_report = trade_tracker.get_daily_report()
     today_stats = {
         "total_trades": tracker_report.get("total_trades", 0),
@@ -428,7 +549,6 @@ def generate(confluence: dict, detectors: dict, seller: dict, vpin: dict,
         "worst_trade": tracker_report.get("worst_trade"),
         "max_drawdown": tracker_report.get("max_drawdown", 0),
         "trades": tracker_report.get("trades", [])[-5:],
-        "signals": [t.get("signal", "") for t in today_trades[-5:]],
     }
 
     return {
@@ -438,22 +558,28 @@ def generate(confluence: dict, detectors: dict, seller: dict, vpin: dict,
         "side": side,
         "reason": reason,
         "trade": trade,
-        "votes": {"bullish": bullish_votes, "bearish": bearish_votes, "total": total_votes},
-        "conviction": round(conviction_total, 1),
+        "entry_zone": entry_zone,
+        "votes": {"bullish": bull, "bearish": bear, "net": net, "total": total_votes},
+        "conviction": round(conviction, 1),
         "strength": round(strength, 2),
         "reasons_bull": reasons_bull[:5],
         "reasons_bear": reasons_bear[:5],
+        # FIX #5: detailed wait reasons
+        "wait_reasons": wait_reasons,
+        "what_to_change": what_to_change,
         "gates": {
-            "ivr": ivr_status,
-            "gex": gex_status,
+            "ivr": ivr_gate,
+            "ivr_value": ivr_val,
+            "gex": gex_gate,
+            "gex_value": net_gex,
             "market": "OPEN" if market_active else "CLOSED",
+            "regime": regime,
         },
         "position_monitor": position_monitor,
         "today_stats": today_stats,
         "market_intel": mi,
         "telegram_active": telegram_alerts.is_configured(),
         "paper_trade_active": trade_tracker.get_active() is not None,
-        "weekly_report": trade_tracker.get_weekly_report(),
         "capital": CAPITAL,
         "max_sl_pct": f"{MAX_SL_PCT * 100:.0f}%",
     }

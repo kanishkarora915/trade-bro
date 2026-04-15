@@ -134,12 +134,31 @@ export default function CommandCenter({ state }: { state: any }) {
           {/* Reason */}
           <p className="text-[11px] text-gray-300 leading-relaxed mb-3">{cmd.reason}</p>
 
-          {/* Votes breakdown */}
+          {/* Wait reasons — FIX #5 */}
+          {cmd.wait_reasons?.length > 0 && !isBuy && (
+            <div className="bg-red-950/10 border border-red-900/20 rounded-lg p-2.5 mb-3">
+              <p className="text-[8px] text-red-500 uppercase font-bold mb-1">Why Not Trading</p>
+              {cmd.wait_reasons.map((r: string, i: number) => (
+                <p key={i} className="text-[9px] text-red-400/80 py-0.5">✗ {r}</p>
+              ))}
+              {cmd.what_to_change?.length > 0 && (
+                <>
+                  <p className="text-[8px] text-emerald-600 uppercase font-bold mt-1.5 mb-0.5">What Needs To Change</p>
+                  {cmd.what_to_change.map((r: string, i: number) => (
+                    <p key={i} className="text-[9px] text-emerald-500/70 py-0.5">→ {r}</p>
+                  ))}
+                </>
+              )}
+            </div>
+          )}
+
+          {/* Votes breakdown — NET based */}
           {cmd.votes && (
             <div className="flex items-center gap-3 mb-3">
               <div className="flex-1">
                 <div className="flex justify-between text-[9px] mb-0.5">
                   <span className="text-emerald-400 font-bold">BULL {cmd.votes.bullish}</span>
+                  <span className={`font-bold font-mono ${(cmd.votes.net || 0) > 0 ? 'text-emerald-400' : (cmd.votes.net || 0) < 0 ? 'text-red-400' : 'text-gray-400'}`}>NET {cmd.votes.net > 0 ? '+' : ''}{cmd.votes.net || 0}</span>
                   <span className="text-red-400 font-bold">BEAR {cmd.votes.bearish}</span>
                 </div>
                 <div className="h-2 bg-gray-800 rounded-full flex overflow-hidden">
@@ -148,15 +167,19 @@ export default function CommandCenter({ state }: { state: any }) {
                 </div>
               </div>
               <div className="flex gap-1.5">
-                {['ivr', 'gex', 'market'].map(g => {
-                  const s = cmd.gates?.[g] || 'GREEN'
+                {[
+                  { key: 'ivr', label: `IVR ${cmd.gates?.ivr_value || ''}%` },
+                  { key: 'gex', label: `GEX ${((cmd.gates?.gex_value || 0) / 1000).toFixed(0)}K` },
+                  { key: 'market', label: cmd.gates?.regime || 'MARKET' },
+                ].map(g => {
+                  const s = cmd.gates?.[g.key] || 'GREEN'
                   const v = typeof s === 'string' ? s : 'GREEN'
                   return (
-                    <span key={g} className={`text-[8px] px-1.5 py-0.5 rounded font-bold ${
+                    <span key={g.key} className={`text-[8px] px-1.5 py-0.5 rounded font-bold ${
                       v === 'GREEN' || v === 'OPEN' ? 'bg-emerald-900/40 text-emerald-400' :
                       v === 'RED' || v === 'CLOSED' ? 'bg-red-900/40 text-red-400' :
                       'bg-yellow-900/40 text-yellow-400'
-                    }`}>{g.toUpperCase()}</span>
+                    }`}>{g.label}</span>
                   )
                 })}
               </div>
@@ -168,12 +191,36 @@ export default function CommandCenter({ state }: { state: any }) {
             <div className="bg-black/30 rounded-xl p-3 grid grid-cols-2 gap-x-6 gap-y-1.5 text-xs font-mono">
               <div className="flex justify-between"><span className="text-gray-500">STRIKE</span><span className="text-cyan-400 font-bold text-sm">{cmd.trade.strike}</span></div>
               <div className="flex justify-between"><span className="text-gray-500">ENTRY</span><span className="text-white font-bold text-sm">₹{cmd.trade.entry}</span></div>
-              <div className="flex justify-between"><span className="text-gray-500">STOP LOSS</span><span className="text-red-400 font-bold">₹{cmd.trade.stop_loss} (-15%)</span></div>
+              <div className="flex justify-between"><span className="text-gray-500">STOP LOSS</span><span className="text-red-400 font-bold">₹{cmd.trade.stop_loss} ({cmd.trade.sl_type || 'FIXED'})</span></div>
               <div className="flex justify-between"><span className="text-gray-500">TARGET 1</span><span className="text-emerald-400">₹{cmd.trade.target1} (+30%)</span></div>
               <div className="flex justify-between"><span className="text-gray-500">TARGET 2</span><span className="text-emerald-400">₹{cmd.trade.target2} (+60%)</span></div>
               <div className="flex justify-between"><span className="text-gray-500">LOTS</span><span className="text-white font-bold">{cmd.trade.lots} ({cmd.trade.lot_size} qty)</span></div>
               <div className="flex justify-between"><span className="text-gray-500">CAPITAL</span><span className="text-white">₹{(cmd.trade.capital_used || 0).toLocaleString('en-IN')}</span></div>
               <div className="flex justify-between"><span className="text-gray-500">MAX LOSS</span><span className="text-red-400">₹{(cmd.trade.max_loss || 0).toLocaleString('en-IN')}</span></div>
+            </div>
+          )}
+
+          {/* Entry Zone — FIX #4 */}
+          {cmd.entry_zone && (
+            <div className="bg-blue-950/10 border border-blue-900/20 rounded-lg p-2.5 mt-3">
+              <p className="text-[8px] text-blue-400 uppercase font-bold mb-1.5">Entry Timing</p>
+              <div className="grid grid-cols-3 gap-2 text-[10px]">
+                <div className="bg-emerald-950/20 rounded-lg p-2">
+                  <p className="text-emerald-500 font-bold text-[9px]">PULLBACK ENTRY</p>
+                  <p className="text-white font-mono font-bold">{cmd.entry_zone.pullback_zone}</p>
+                  <p className="text-[8px] text-gray-500 mt-0.5">{cmd.entry_zone.pullback_reason}</p>
+                </div>
+                <div className="bg-blue-950/20 rounded-lg p-2">
+                  <p className="text-blue-400 font-bold text-[9px]">BREAKOUT ENTRY</p>
+                  <p className="text-white font-mono font-bold">{cmd.entry_zone.breakout_level}</p>
+                  <p className="text-[8px] text-gray-500 mt-0.5">{cmd.entry_zone.breakout_reason}</p>
+                </div>
+                <div className="bg-red-950/20 rounded-lg p-2">
+                  <p className="text-red-400 font-bold text-[9px]">AVOID ABOVE</p>
+                  <p className="text-white font-mono font-bold">{cmd.entry_zone.avoid_above}</p>
+                  <p className="text-[8px] text-gray-500 mt-0.5">{cmd.entry_zone.avoid_reason}</p>
+                </div>
+              </div>
             </div>
           )}
         </div>
