@@ -26,6 +26,7 @@ DELTA_FLIP_MIN = 0.15      # minimum delta change to count as flip
 _oi_history: dict[str, deque] = {}      # "strike_side" → deque of (timestamp, oi)
 _price_history: dict[str, deque] = {}   # "strike_side" → deque of (timestamp, price)
 _dealer_delta_history: deque = deque(maxlen=200)  # (timestamp, net_delta)
+_panic_log: deque = deque(maxlen=50)    # all panic events — persist for conclusion
 _last_cycle_ts: float = 0
 
 # ── Black-Scholes helpers ──
@@ -139,6 +140,40 @@ def analyze(chain: dict, spot: float, atm: int, strike_step: int = 50,
             })
 
     panic_events.sort(key=lambda x: x["velocity"])  # most negative first
+
+    # Save to persistent log (old events stay)
+    for p in panic_events:
+        p["logged_at"] = now.strftime("%H:%M:%S")
+        _panic_log.append(p)
+
+    # Analyze ALL panic events (current + historical) for conclusion
+    ce_panic_count = sum(1 for p in _panic_log if p.get("side") == "CE")
+    pe_panic_count = sum(1 for p in _panic_log if p.get("side") == "PE")
+    ce_total_velocity = sum(abs(p.get("velocity", 0)) for p in _panic_log if p.get("side") == "CE")
+    pe_total_velocity = sum(abs(p.get("velocity", 0)) for p in _panic_log if p.get("side") == "PE")
+
+    # Conclusion from cumulative panic data
+    panic_conclusion = ""
+    panic_buyer_action = ""
+
+    if ce_panic_count > pe_panic_count + 2:
+        panic_conclusion = f"CE sellers panicking more ({ce_panic_count} events vs {pe_panic_count} PE). Call writers are running — they wrote calls expecting market to stay/fall, but it's moving UP. Their covering is FUELING the up move."
+        panic_buyer_action = "BUY CE — CE sellers covering = forced buying = price acceleration upward. Enter on any dip."
+    elif pe_panic_count > ce_panic_count + 2:
+        panic_conclusion = f"PE sellers panicking more ({pe_panic_count} events vs {ce_panic_count} CE). Put writers are running — they wrote puts expecting market to stay/rise, but it's FALLING. Their covering is accelerating the down move."
+        panic_buyer_action = "BUY PE — PE sellers covering = forced selling = price acceleration downward."
+    elif ce_panic_count > 0 and pe_panic_count > 0:
+        panic_conclusion = f"Both CE ({ce_panic_count}) and PE ({pe_panic_count}) sellers panicking. Market is VOLATILE — big move in either direction. Wait for one side to dominate."
+        panic_buyer_action = "WAIT — both sides stressed, direction unclear. Let one side win first."
+    elif ce_panic_count > 0:
+        panic_conclusion = f"Only CE sellers covering ({ce_panic_count} events, velocity {ce_total_velocity:,.0f} OI/min total). Mild bullish pressure from short covering."
+        panic_buyer_action = "WATCHLIST CE — covering happening but not yet panicking. Watch for acceleration."
+    elif pe_panic_count > 0:
+        panic_conclusion = f"Only PE sellers covering ({pe_panic_count} events, velocity {pe_total_velocity:,.0f} OI/min total). Mild bearish pressure."
+        panic_buyer_action = "WATCHLIST PE — put covering happening. Watch for acceleration."
+    else:
+        panic_conclusion = "No dealer panic detected. Sellers are comfortable in their positions. Market likely range-bound."
+        panic_buyer_action = "NO ACTION — sellers not stressed, no forced move expected."
 
     # Overall panic level
     if any(p["level"] == "EXTREME" for p in panic_events):
@@ -279,16 +314,63 @@ def analyze(chain: dict, spot: float, atm: int, strike_step: int = 50,
                     flip_direction = "BULLISH FLIP"
                     flip_detail = f"Dealers flipped from SHORT delta ({old_delta:,.0f}) to LONG delta ({new_delta:,.0f}). They were selling futures, now BUYING. Market will RISE."
 
-    # Dealer stance
+    # Dealer stance with detailed scenario
+    delta_scenario = ""
+    delta_what_it_means = ""
+
     if net_dealer_delta > 0:
-        dealer_stance = "LONG DELTA — Dealers buying futures to hedge. Supportive for market."
+        dealer_stance = "LONG DELTA"
         stance_color = "green"
+        delta_scenario = (
+            f"Dealers are NET LONG delta ({net_dealer_delta:,.0f}). "
+            f"This means buyers have accumulated more PUTS than CALLS. "
+            f"Dealers sold those puts, making them LONG delta. "
+            f"To stay neutral, dealers are BUYING {abs(net_dealer_delta):,.0f} delta worth of futures."
+        )
+        delta_what_it_means = (
+            "BULLISH for buyer: Dealers buying futures = market support. "
+            "If market dips, dealers buy MORE futures (hedging) = dip gets bought. "
+            "This creates a floor under the market. BUY CE on dips."
+        )
     elif net_dealer_delta < 0:
-        dealer_stance = "SHORT DELTA — Dealers selling futures to hedge. Pressure on market."
+        dealer_stance = "SHORT DELTA"
         stance_color = "red"
+        delta_scenario = (
+            f"Dealers are NET SHORT delta ({net_dealer_delta:,.0f}). "
+            f"This means buyers have accumulated more CALLS than PUTS. "
+            f"Dealers sold those calls, making them SHORT delta. "
+            f"To stay neutral, dealers are SELLING {abs(net_dealer_delta):,.0f} delta worth of futures."
+        )
+        delta_what_it_means = (
+            "BEARISH pressure: Dealers selling futures = downward force. "
+            "If market rises, dealers sell MORE futures = rally gets capped. "
+            "But if market drops sharply, dealers cover shorts = accelerated down move. "
+            "Careful with CE buys — dealer is working against you."
+        )
     else:
-        dealer_stance = "NEUTRAL — Dealers delta-neutral."
+        dealer_stance = "NEUTRAL"
         stance_color = "gray"
+        delta_scenario = "Dealers are delta-neutral. Balanced CE/PE positions."
+        delta_what_it_means = "No directional pressure from dealer hedging. Market driven by other factors."
+
+    # Delta trend analysis (last 30 data points)
+    delta_trend = "STABLE"
+    delta_trend_detail = ""
+    if len(_dealer_delta_history) >= 10:
+        recent_deltas = [d[1] for d in list(_dealer_delta_history)[-10:]]
+        old_avg = sum(recent_deltas[:5]) / 5
+        new_avg = sum(recent_deltas[5:]) / 5
+        delta_change = new_avg - old_avg
+
+        if delta_change > abs(old_avg) * 0.1:
+            delta_trend = "SHIFTING LONG"
+            delta_trend_detail = f"Delta moving from {old_avg:,.0f} → {new_avg:,.0f}. Dealers accumulating long delta. More put selling = bullish shift."
+        elif delta_change < -abs(old_avg) * 0.1:
+            delta_trend = "SHIFTING SHORT"
+            delta_trend_detail = f"Delta moving from {old_avg:,.0f} → {new_avg:,.0f}. Dealers accumulating short delta. More call selling = bearish shift."
+        else:
+            delta_trend = "STABLE"
+            delta_trend_detail = f"Delta stable around {new_avg:,.0f}. No significant shift in dealer positioning."
 
     # ══════════════════════════════════════════
     #  5. BUYER SIGNALS from dealer analysis
@@ -324,7 +406,19 @@ def analyze(chain: dict, spot: float, atm: int, strike_step: int = 50,
         # 1. Panic Velocity
         "panic_level": panic_level,
         "panic_msg": panic_msg,
+        "panic_conclusion": panic_conclusion,
+        "panic_buyer_action": panic_buyer_action,
         "panic_events": panic_events[:5],
+        "panic_history": [{"strike": p["strike"], "side": p["side"], "velocity": p["velocity"],
+                           "level": p["level"], "time": p.get("logged_at", "")}
+                          for p in list(_panic_log)[-15:]],
+        "panic_stats": {
+            "ce_events": ce_panic_count,
+            "pe_events": pe_panic_count,
+            "ce_total_velocity": round(ce_total_velocity, 0),
+            "pe_total_velocity": round(pe_total_velocity, 0),
+            "dominant_side": "CE" if ce_panic_count > pe_panic_count else "PE" if pe_panic_count > ce_panic_count else "NONE",
+        },
 
         # 2. Gamma Squeeze
         "squeeze_active": squeeze_active,
@@ -340,6 +434,10 @@ def analyze(chain: dict, spot: float, atm: int, strike_step: int = 50,
         "net_dealer_delta": round(net_dealer_delta, 0),
         "dealer_stance": dealer_stance,
         "stance_color": stance_color,
+        "delta_scenario": delta_scenario,
+        "delta_what_it_means": delta_what_it_means,
+        "delta_trend": delta_trend,
+        "delta_trend_detail": delta_trend_detail,
         "delta_flip": delta_flip,
         "flip_direction": flip_direction,
         "flip_detail": flip_detail,
