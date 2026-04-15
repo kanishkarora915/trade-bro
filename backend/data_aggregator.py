@@ -32,6 +32,7 @@ from trap_detector import update_and_detect as trap_detect
 from dealer_positions import analyze as dealer_analyze
 from command_center import generate as cmd_generate
 from market_intel import analyze as intel_analyze
+from sniper import analyze as sniper_analyze
 from timeframe_engine import TimeframeEngine
 from data_store import DataStore
 from mtf_analyzer import analyze_mtf
@@ -63,6 +64,7 @@ class IndexState:
         self.dealer_data: dict = {"panic_level": "NORMAL", "signals": []}
         self.command: dict = {"signal": "WAIT", "reason": "Initializing..."}
         self.market_intel: dict = {"regime": {"regime": "UNKNOWN"}, "tradeability": {"score": 100, "verdict": "GO"}}
+        self.sniper: dict = {"phase": "SCAN", "position": None}
         self.strike_map: list = []
         self.raw_data: dict = {}
         self.error: str = ""
@@ -636,6 +638,19 @@ class UserAggregator:
                 except Exception as e:
                     state.command = {"signal": "WAIT", "reason": f"Engine error: {e}"}
 
+                # SNIPER — phased position building
+                try:
+                    state.sniper = sniper_analyze(
+                        confluence=state.confluence, detectors=state.detectors,
+                        seller=state.seller_footprint, vpin=vpin_engine.get_all_states(),
+                        trap=state.trap_data, dealer=state.dealer_data,
+                        chain=state.chain, spot=spot, atm=state.atm,
+                        index_id=idx, strike_step=idx_cfg["strike_step"],
+                        market_intel=state.market_intel,
+                    )
+                except Exception as e:
+                    state.sniper = {"phase": "SCAN", "position": None, "error": str(e)}
+
                 state.strike_map = state.detectors.get("d06_confluence_map", {}).get("strike_map", [])
 
                 # Signal history tracking — AGGRESSIVE + ACCURACY-GATED REPEATS
@@ -1032,6 +1047,8 @@ class UserAggregator:
             "dealer_data": active_state.dealer_data,
             # Command Center (ONE signal)
             "command": active_state.command,
+            # Sniper (phased position builder)
+            "sniper": active_state.sniper,
             # VPIN flow toxicity
             "vpin": vpin_engine.get_all_states(),
             # Expiry info
