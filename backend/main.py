@@ -348,6 +348,40 @@ async def paper_report(period: str):
     import paper_trader
     return paper_trader.get_report(period)
 
+@app.get("/api/paper/export/{period}")
+async def paper_export(period: str):
+    """Export trades as CSV."""
+    import paper_trader
+    from fastapi.responses import PlainTextResponse
+    report = paper_trader.get_report(period)
+    trades = report.get("trades", [])
+    if not trades:
+        return PlainTextResponse("No trades to export", media_type="text/plain")
+    # CSV header
+    cols = ["date", "strike", "side", "entry_price", "exit_price", "lots", "lot_size",
+            "quantity", "capital_used", "final_pnl_pct", "final_pnl_abs", "hold_time_min",
+            "exit_reason", "source", "reason"]
+    lines = [",".join(cols)]
+    for t in trades:
+        row = [str(t.get(c, "")) for c in cols]
+        lines.append(",".join(row))
+    # Add summary
+    lines.append("")
+    lines.append(f"Period,{report['period_label']}")
+    lines.append(f"Total Trades,{report['total_trades']}")
+    lines.append(f"Win Rate,{report['win_rate']}%")
+    lines.append(f"Net P&L,{report['net_pnl']}")
+    lines.append(f"Gross Profit,{report['gross_profit']}")
+    lines.append(f"Gross Loss,{report['gross_loss']}")
+    lines.append(f"Profit Factor,{report['profit_factor']}")
+    lines.append(f"Capital Start,{report['starting_capital']}")
+    lines.append(f"Capital Remaining,{report['capital_remaining']}")
+    lines.append(f"Capital Growth,{report['capital_growth_pct']}%")
+    lines.append(f"Max Drawdown,{report['max_drawdown']}")
+    csv_content = "\n".join(lines)
+    return PlainTextResponse(csv_content, media_type="text/csv",
+                             headers={"Content-Disposition": f"attachment; filename=tradebro_{period}_{report.get('period_label','').replace(' ','_')}.csv"})
+
 
 # --- Auto-Tune ---
 @app.get("/api/autotune/run")

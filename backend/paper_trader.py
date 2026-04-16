@@ -21,9 +21,10 @@ PT_DIR = os.path.join(DATA_DIR, "paper_trader")
 # ── Default Settings ──
 _settings = {
     "capital": 1000000,
-    "lot_sizes": {"NIFTY": 75, "BANKNIFTY": 30, "SENSEX": 20},
+    "lot_sizes": {"NIFTY": 65, "BANKNIFTY": 30, "SENSEX": 20},
     "max_sl_pct": 15,
     "max_positions": 3,
+    "starting_capital": 1000000,  # never changes — for P&L % calc
 }
 
 # ── State ──
@@ -306,8 +307,9 @@ def get_state(chain: dict = None) -> dict:
 
 
 def get_report(period: str = "daily") -> dict:
-    """Generate report for daily/weekly/monthly."""
+    """Generate detailed P&L report — real math, no mock."""
     today = datetime.now(IST)
+    starting_capital = _settings.get("starting_capital", _settings["capital"])
 
     if period == "daily":
         dates = [_today()]
@@ -321,23 +323,119 @@ def get_report(period: str = "daily") -> dict:
     for date in dates:
         trades = _load_day_trades(date)
         if trades:
-            day_pnl = sum(t.get("final_pnl_abs", 0) for t in trades)
-            daily_pnls.append({"date": date, "pnl": round(day_pnl, 0), "trades": len(trades)})
+            day_wins = [t for t in trades if (t.get("final_pnl_abs", 0)) > 0]
+            day_losses = [t for t in trades if (t.get("final_pnl_abs", 0)) <= 0]
+            day_gross_profit = sum(t.get("final_pnl_abs", 0) for t in day_wins)
+            day_gross_loss = sum(t.get("final_pnl_abs", 0) for t in day_losses)
+            day_net = day_gross_profit + day_gross_loss
+            day_capital_used = sum(t.get("capital_used", 0) for t in trades)
+
+            daily_pnls.append({
+                "date": date,
+                "trades": len(trades),
+                "wins": len(day_wins),
+                "losses": len(day_losses),
+                "gross_profit": round(day_gross_profit, 0),
+                "gross_loss": round(day_gross_loss, 0),
+                "net_pnl": round(day_net, 0),
+                "capital_used": round(day_capital_used, 0),
+                "win_rate": round(len(day_wins) / max(len(trades), 1) * 100, 1),
+            })
             all_trades.extend(trades)
 
-    total_pnl = sum(t.get("final_pnl_abs", 0) for t in all_trades)
-    wins = [t for t in all_trades if t.get("final_pnl_pct", 0) > 0]
+    # ── Full math ──
+    total_trades = len(all_trades)
+    wins = [t for t in all_trades if (t.get("final_pnl_abs", 0)) > 0]
+    losses = [t for t in all_trades if (t.get("final_pnl_abs", 0)) <= 0]
+    gross_profit = sum(t.get("final_pnl_abs", 0) for t in wins)
+    gross_loss = sum(t.get("final_pnl_abs", 0) for t in losses)  # negative number
+    net_pnl = gross_profit + gross_loss
+    total_capital_used = sum(t.get("capital_used", 0) for t in all_trades)
+
+    # Capital tracking
+    capital_after = starting_capital + net_pnl
+    capital_growth_pct = round(net_pnl / starting_capital * 100, 2) if starting_capital > 0 else 0
+    capital_remaining = round(capital_after, 0)
+
+    # Avg win / avg loss
+    avg_win = round(sum(t.get("final_pnl_abs", 0) for t in wins) / max(len(wins), 1), 0)
+    avg_loss = round(sum(t.get("final_pnl_abs", 0) for t in losses) / max(len(losses), 1), 0)
+    avg_win_pct = round(sum(t.get("final_pnl_pct", 0) for t in wins) / max(len(wins), 1), 1)
+    avg_loss_pct = round(sum(t.get("final_pnl_pct", 0) for t in losses) / max(len(losses), 1), 1)
+
+    # Profit factor
+    profit_factor = round(abs(gross_profit) / abs(gross_loss), 2) if gross_loss != 0 else 999
+
+    # Max drawdown
+    running = 0
+    peak = 0
+    max_dd = 0
+    for t in all_trades:
+        running += t.get("final_pnl_abs", 0)
+        if running > peak:
+            peak = running
+        dd = peak - running
+        if dd > max_dd:
+            max_dd = dd
+
+    # Expectancy = (win_rate × avg_win) + (loss_rate × avg_loss)
+    wr = len(wins) / max(total_trades, 1)
+    expectancy = round(wr * avg_win + (1 - wr) * avg_loss, 0)
+
+    # Best/worst streaks
+    max_win_streak = max_loss_streak = curr = 0
+    for t in all_trades:
+        pnl = t.get("final_pnl_abs", 0)
+        if pnl > 0:
+            curr = curr + 1 if curr > 0 else 1
+            max_win_streak = max(max_win_streak, curr)
+        else:
+            curr = curr - 1 if curr < 0 else -1
+            max_loss_streak = max(max_loss_streak, abs(curr))
 
     return {
         "period": period,
-        "total_trades": len(all_trades),
+        "period_label": "Today" if period == "daily" else "Last 7 Days" if period == "weekly" else "This Month",
+
+        # Trade counts
+        "total_trades": total_trades,
         "wins": len(wins),
-        "losses": len(all_trades) - len(wins),
-        "win_rate": round(len(wins) / max(len(all_trades), 1) * 100, 1),
-        "total_pnl": round(total_pnl, 0),
-        "total_pnl_pct": round(total_pnl / _settings["capital"] * 100, 2),
-        "avg_pnl_per_trade": round(total_pnl / max(len(all_trades), 1), 0),
-        "capital": _settings["capital"],
+        "losses": len(losses),
+        "win_rate": round(len(wins) / max(total_trades, 1) * 100, 1),
+
+        # P&L — real math
+        "gross_profit": round(gross_profit, 0),
+        "gross_loss": round(gross_loss, 0),
+        "net_pnl": round(net_pnl, 0),
+        "net_pnl_pct": capital_growth_pct,
+        "profit_factor": profit_factor,
+        "expectancy": expectancy,
+
+        # Averages
+        "avg_win": avg_win,
+        "avg_loss": avg_loss,
+        "avg_win_pct": avg_win_pct,
+        "avg_loss_pct": avg_loss_pct,
+
+        # Capital
+        "starting_capital": starting_capital,
+        "capital_used_total": round(total_capital_used, 0),
+        "capital_remaining": capital_remaining,
+        "capital_growth": round(net_pnl, 0),
+        "capital_growth_pct": capital_growth_pct,
+
+        # Risk
+        "max_drawdown": round(max_dd, 0),
+        "max_drawdown_pct": round(max_dd / starting_capital * 100, 2) if starting_capital > 0 else 0,
+        "max_win_streak": max_win_streak,
+        "max_loss_streak": max_loss_streak,
+
+        # Daily breakdown
         "daily_pnls": daily_pnls,
+
+        # Trades
         "trades": all_trades[-20:],
+
+        # Lot sizes (for reference)
+        "lot_sizes": _settings["lot_sizes"],
     }

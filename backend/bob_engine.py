@@ -20,7 +20,7 @@ SL_PCT = 0.40  # Exit when premium falls 40%
 T1_MULT = 1.80  # +80% profit
 T2_MULT = 2.50  # +150% profit
 
-LOT_SIZES = {"NIFTY": 75, "BANKNIFTY": 30, "SENSEX": 20}
+LOT_SIZES = {"NIFTY": 65, "BANKNIFTY": 30, "SENSEX": 20}
 
 # ── Detector groups ──
 ACCUMULATION_DETECTORS = ["d02_order_flow", "d03_sweep", "d08_repeat_buyer"]

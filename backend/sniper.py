@@ -31,7 +31,7 @@ IST = timezone(timedelta(hours=5, minutes=30))
 DATA_DIR = os.environ.get("DATA_DIR", os.path.join(os.path.dirname(__file__), "data"))
 
 CAPITAL = 1000000
-LOT_SIZES = {"NIFTY": 75, "BANKNIFTY": 30, "SENSEX": 20}
+LOT_SIZES = {"NIFTY": 65, "BANKNIFTY": 30, "SENSEX": 20}
 
 # Phase thresholds (NET votes = bull - bear)
 SCOUT_NET = 3      # early signal — 1 lot probe

@@ -25,7 +25,7 @@ IST = timezone(timedelta(hours=5, minutes=30))
 
 CAPITAL = 1000000
 MAX_SL_PCT = 0.15
-LOT_SIZES = {"NIFTY": 75, "BANKNIFTY": 30, "SENSEX": 20}
+LOT_SIZES = {"NIFTY": 65, "BANKNIFTY": 30, "SENSEX": 20}
 T1_MULT = 1.30
 T2_MULT = 1.60
 
