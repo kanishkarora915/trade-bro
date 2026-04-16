@@ -111,25 +111,25 @@ def calculate(detector_results: dict, is_expiry_day: bool = False) -> dict:
     # Normalize to 100
     normalized = (raw_score / TOTAL_MAX_POINTS) * 100
 
-    # CRITICAL detector boost — reduced to prevent score oscillation
+    # FIX #8: Capped boosts — max 1.3x total (was 1.6x + 1.3x + 1.2x = 2.5x!!)
     critical_count = sum(1 for r in detector_results.values() if r.get("status") == "CRITICAL")
     alert_count = sum(1 for r in detector_results.values() if r.get("status") in ("CRITICAL", "ALERT"))
+    boost = 1.0
     if critical_count >= 4:
-        normalized = min(100, normalized * 1.6)
+        boost = 1.20
     elif critical_count >= 3:
-        normalized = min(100, normalized * 1.4)
+        boost = 1.15
     elif critical_count >= 2:
-        normalized = min(100, normalized * 1.25)
-    elif critical_count >= 1 and alert_count >= 3:
-        normalized = min(100, normalized * 1.15)
+        boost = 1.10
 
-    # Apply time multiplier — reduced from 2.0x max to 1.3x
-    time_mult = _time_multiplier()
-    normalized = min(100, normalized * time_mult)
+    # Time multiplier (capped) — removed arbitrary time boosts
+    time_mult = 1.0  # FIX #8: no time boost, let data speak
 
-    # Expiry day bonus — reduced
-    if is_expiry_day:
-        normalized = min(100, normalized * 1.2)
+    # Expiry day — no bonus (expiry = dangerous for buyers)
+    # FIX #8: removed expiry bonus
+
+    # Apply single capped boost
+    normalized = min(100, normalized * boost)
 
     normalized = round(normalized, 1)
 

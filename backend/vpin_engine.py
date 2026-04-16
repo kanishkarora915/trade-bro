@@ -141,11 +141,14 @@ class InstrumentVPIN:
                 self._sigma = max(0.0001, math.sqrt(variance))
         self._prev_price = price
 
-        # ── BVC: Bulk Volume Classification ──
-        # Split volume into buy/sell using normal CDF of standardized price change
+        # ── BVC: Bulk Volume Classification (FIX #5: regime-aware) ──
+        # Clamp z-score to [-3, 3] to handle fat tails (options don't follow normal dist)
         if self._sigma > 0 and self._prev_price > 0 and len(self._returns) > 0:
             z = self._returns[-1] / self._sigma if self._sigma > 0 else 0
+            z = max(-3.0, min(3.0, z))  # clamp fat tails
             buy_prob = _norm_cdf(z)
+            # Dampen extreme probabilities (never > 85% or < 15% — options have noise)
+            buy_prob = 0.15 + buy_prob * 0.70  # map [0,1] → [0.15, 0.85]
         else:
             buy_prob = 0.5  # no info yet
 

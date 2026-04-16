@@ -34,7 +34,17 @@ _active_trade: dict | None = None
 _trade_history: list[dict] = []
 _position_alerts: deque = deque(maxlen=20)
 _last_signal_ts: float = 0
-SIGNAL_COOLDOWN = 600
+_daily_pnl: float = 0  # running daily P&L
+_daily_losses: int = 0  # consecutive losses today
+_last_reset_date: str = ""
+SIGNAL_COOLDOWN_NORMAL = 300   # 5 min normal
+SIGNAL_COOLDOWN_TRENDING = 180 # 3 min trending
+SIGNAL_COOLDOWN_RANGE = 600    # 10 min range
+DAILY_LOSS_LIMIT = -20000      # ₹20K max daily loss
+MAX_CONSECUTIVE_LOSSES = 3     # pause after 3 losses
+COMMISSION_PER_LOT = 200       # ~₹200 per lot brokerage
+SLIPPAGE_PCT = 0.005           # 0.5% slippage buffer
+CONVICTION_CAP = 15            # max conviction score
 
 # ── Inline IVR + GEX (no Bob dependency) ──
 def _calc_ivr(chain: dict, atm: int) -> tuple[float, str]:
@@ -80,41 +90,49 @@ def _calc_gex(chain: dict, spot: float, tte_mins: float, lot_size: int) -> tuple
     net = ce_gex - pe_gex
     return round(net, 0), "GREEN" if net < 0 else "RED"
 
-# ── Dynamic SL from OI walls ──
-def _find_dynamic_sl(chain: dict, spot: float, atm: int, side: str, step: int, entry: float) -> float:
-    """Find SL based on nearest OI wall. Fallback to 15%."""
+# ── Dynamic SL from actual chain premium at OI wall strike (FIX #1) ──
+def _find_dynamic_sl(chain: dict, spot: float, atm: int, side: str, step: int, entry: float) -> tuple[float, str]:
+    """Find SL from actual premium at OI wall strike. Returns (sl_price, sl_type)."""
     if side == "CE":
-        # For CE buy: SL = PE OI wall below spot (support level)
-        best_wall = None
+        # CE buy SL: find strongest PE OI wall below ATM (support)
+        # When spot falls to wall, look up actual CE premium there
+        walls = []
         for strike in sorted(chain.keys()):
-            if strike >= atm:
+            if strike >= atm - step:
                 continue
             pe = chain[strike].get("PE", {})
-            oi = pe.get("oi", 0)
-            if oi > 50000:
-                best_wall = (strike, oi)
-        if best_wall:
-            # Premium at wall level (rough: premium drops ~3x the underlying move %)
-            drop_pct = (spot - best_wall[0]) / spot
-            sl = entry * (1 - drop_pct * 2.5)
-            return max(round(sl, 1), entry * 0.70)  # never below 30% loss
+            if pe.get("oi", 0) > 30000:
+                walls.append((strike, pe["oi"]))
+        if walls:
+            best_wall = max(walls, key=lambda w: w[1])
+            # Get CE premium at a strike near the wall (approximation)
+            # If wall at 22200 and we bought 22350 CE, check 22350 CE premium
+            # when spot would be at 22200 — use OTM premium as proxy
+            wall_ce = chain.get(best_wall[0] + step, {}).get("CE", {})
+            if wall_ce and wall_ce.get("last_price", 0) > 0:
+                sl = round(wall_ce["last_price"] * 0.85, 1)  # 15% below wall premium
+                return max(sl, entry * 0.70), "OI WALL"
+            # Fallback: use delta-approximated premium at wall
+            sl = round(entry * max(0.70, 1 - abs(spot - best_wall[0]) / spot * 1.5), 1)
+            return sl, "OI WALL"
     else:
-        # For PE buy: SL = CE OI wall above spot (resistance level)
-        best_wall = None
+        walls = []
         for strike in sorted(chain.keys()):
-            if strike <= atm:
+            if strike <= atm + step:
                 continue
             ce = chain[strike].get("CE", {})
-            oi = ce.get("oi", 0)
-            if oi > 50000:
-                best_wall = (strike, oi)
-                break
-        if best_wall:
-            rise_pct = (best_wall[0] - spot) / spot
-            sl = entry * (1 - rise_pct * 2.5)
-            return max(round(sl, 1), entry * 0.70)
+            if ce.get("oi", 0) > 30000:
+                walls.append((strike, ce["oi"]))
+        if walls:
+            best_wall = max(walls, key=lambda w: w[1])
+            wall_pe = chain.get(best_wall[0] - step, {}).get("PE", {})
+            if wall_pe and wall_pe.get("last_price", 0) > 0:
+                sl = round(wall_pe["last_price"] * 0.85, 1)
+                return max(sl, entry * 0.70), "OI WALL"
+            sl = round(entry * max(0.70, 1 - abs(best_wall[0] - spot) / spot * 1.5), 1)
+            return sl, "OI WALL"
 
-    return round(entry * (1 - MAX_SL_PCT), 1)  # fallback 15%
+    return round(entry * (1 - MAX_SL_PCT), 1), "FIXED 15%"
 
 # ── Entry timing ──
 def _calc_entry_zone(chain: dict, spot: float, atm: int, side: str, step: int, entry: float) -> dict:
@@ -240,15 +258,31 @@ def generate(confluence: dict, detectors: dict, seller: dict, vpin: dict,
              trap: dict, dealer: dict, bob: dict, chain: dict,
              spot: float, atm: int, index_id: str = "NIFTY",
              strike_step: int = 50, market_intel: dict | None = None) -> dict:
-    """Command Center v2 — NET votes, dynamic SL, entry timing."""
-    global _active_trade, _last_signal_ts
+    """Command Center v3 — NET votes, dynamic SL, entry timing, circuit breakers."""
+    global _active_trade, _last_signal_ts, _daily_pnl, _daily_losses, _last_reset_date
 
     now = datetime.now(IST)
     now_ts = time.time()
     h, m = now.hour, now.minute
     lot_size = LOT_SIZES.get(index_id, 75)
+    today = now.strftime("%Y-%m-%d")
+
+    # Daily reset
+    if today != _last_reset_date:
+        _daily_pnl = 0
+        _daily_losses = 0
+        _last_reset_date = today
 
     market_active = (h == 9 and m >= 18) or (10 <= h <= 14) or (h == 15 and m < 20)
+
+    # Adaptive cooldown based on regime
+    regime_str = (market_intel or {}).get("regime", {}).get("regime", "UNKNOWN")
+    if "TRENDING" in regime_str:
+        cooldown = SIGNAL_COOLDOWN_TRENDING
+    elif "RANGE" in regime_str:
+        cooldown = SIGNAL_COOLDOWN_RANGE
+    else:
+        cooldown = SIGNAL_COOLDOWN_NORMAL
 
     # ══════════════════════════════════════════
     #  STEP 1: Collect votes from ALL sources
@@ -319,6 +353,9 @@ def generate(confluence: dict, detectors: dict, seller: dict, vpin: dict,
             reasons_bear.append(f"Trap reversal: {t['strike']} PE")
             conviction += 2
 
+    # Cap conviction (FIX: no infinite conviction)
+    conviction = min(conviction, CONVICTION_CAP)
+
     # ══════════════════════════════════════════
     #  STEP 2: NET direction (FIX #1 — no more conflicting signals)
     # ══════════════════════════════════════════
@@ -358,10 +395,24 @@ def generate(confluence: dict, detectors: dict, seller: dict, vpin: dict,
     wait_reasons = []  # FIX #5 — all blockers
     what_to_change = []
 
+    # Expiry day auto-close (FIX #16)
+    is_expiry = mi.get("expiry", {}).get("is_expiry", False)
+    if is_expiry and h == 15 and m >= 15 and _active_trade:
+        _active_trade["status"] = "EXPIRY_CLOSE"
+
     if not market_active:
         signal = "MARKET CLOSED"
         reason = "No trading outside 9:18-15:20 IST"
     else:
+        # Circuit breaker (FIX #14)
+        if _daily_losses >= MAX_CONSECUTIVE_LOSSES:
+            wait_reasons.append(f"CIRCUIT BREAKER — {_daily_losses} consecutive losses. Paused 30 min.")
+            what_to_change.append("Wait 30 min or next winning trade to reset")
+        # Daily loss limit (FIX #15)
+        if _daily_pnl <= DAILY_LOSS_LIMIT:
+            wait_reasons.append(f"DAILY LOSS LIMIT — ₹{abs(_daily_pnl):,.0f} lost today. No more trades.")
+            what_to_change.append("Tomorrow — fresh day, fresh capital")
+
         # Check all blockers
         if trade_verdict == "AVOID":
             wait_reasons.append(f"Market regime: {regime} — not tradeable")
@@ -395,7 +446,7 @@ def generate(confluence: dict, detectors: dict, seller: dict, vpin: dict,
 
     # Cooldown
     if signal in ("BUY", "STRONG BUY"):
-        if now_ts - _last_signal_ts < SIGNAL_COOLDOWN and _active_trade:
+        if now_ts - _last_signal_ts < cooldown and _active_trade:
             if _active_trade.get("side") != side:
                 signal = "WAIT"
                 reason = f"Cooldown — active {_active_trade['side']} trade. {int(SIGNAL_COOLDOWN - (now_ts - _last_signal_ts))}s left."
@@ -408,20 +459,22 @@ def generate(confluence: dict, detectors: dict, seller: dict, vpin: dict,
     if signal in ("BUY", "STRONG BUY") and chain:
         pick = _pick_best_strike(chain, spot, atm, side, strike_step)
         if pick:
-            entry = pick["ltp"]
-            # FIX #3: Dynamic SL from OI walls
-            sl = _find_dynamic_sl(chain, spot, atm, side, strike_step, entry)
+            raw_entry = pick["ltp"]
+            # Add slippage (FIX #13)
+            entry = round(raw_entry * (1 + SLIPPAGE_PCT), 1)
+
+            # FIX #1: Dynamic SL from actual chain premium at OI wall
+            sl, sl_type = _find_dynamic_sl(chain, spot, atm, side, strike_step, entry)
             t1 = round(entry * T1_MULT, 1)
             t2 = round(entry * T2_MULT, 1)
             risk_per_lot = (entry - sl) * lot_size
             max_risk = CAPITAL * 0.02
-            lots = max(1, int(max_risk / max(risk_per_lot, 1)))
+            lots = max(1, min(5, int(max_risk / max(risk_per_lot, 1))))  # cap at 5 lots
             capital_used = entry * lot_size * lots
+            commission = COMMISSION_PER_LOT * lots  # FIX: commissions
 
             # FIX #4: Entry timing
             entry_zone = _calc_entry_zone(chain, spot, atm, side, strike_step, entry)
-
-            sl_type = "OI WALL" if sl != round(entry * (1 - MAX_SL_PCT), 1) else "FIXED 15%"
 
             trade = {
                 "strike": f"{pick['strike']} {side}",
@@ -437,6 +490,8 @@ def generate(confluence: dict, detectors: dict, seller: dict, vpin: dict,
                 "max_loss": round(risk_per_lot * lots, 0),
                 "volume": pick["vol"],
                 "oi": pick["oi"],
+                "commission": round(commission, 0),
+                "slippage_applied": f"{SLIPPAGE_PCT*100}%",
                 "entry_zone": entry_zone,
             }
 

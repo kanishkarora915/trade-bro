@@ -31,7 +31,20 @@ _prev_chain_oi: dict = {}  # {strike_side: oi} — previous cycle's OI
 _cumulative_ce_seller: dict = {}  # {strike: cumulative_oi_added_by_sellers}
 _cumulative_pe_seller: dict = {}
 _flash_alerts: deque = deque(maxlen=20)
-_active_trade: dict | None = None  # currently active trade for flash monitoring
+_active_trade: dict | None = None
+_last_reset_date: str = ""
+
+
+def _daily_reset():
+    """FIX #6: Reset cumulative data at start of each day."""
+    global _prev_chain_oi, _cumulative_ce_seller, _cumulative_pe_seller, _flash_alerts, _last_reset_date
+    today = datetime.now(IST).strftime("%Y-%m-%d")
+    if today != _last_reset_date:
+        _prev_chain_oi = {}
+        _cumulative_ce_seller = {}
+        _cumulative_pe_seller = {}
+        _flash_alerts = deque(maxlen=20)
+        _last_reset_date = today
 
 
 def _classify(oi_chg: float, price_chg: float) -> str:
@@ -50,6 +63,7 @@ def _classify(oi_chg: float, price_chg: float) -> str:
 def analyze(chain: dict, spot: float, atm: int, strike_step: int = 50) -> dict:
     """Full seller footprint analysis with buy signals and flash alerts."""
     global _prev_chain_oi, _cumulative_ce_seller, _cumulative_pe_seller
+    _daily_reset()  # FIX #6: reset stale data daily
 
     now = datetime.now(IST)
     h, m = now.hour, now.minute

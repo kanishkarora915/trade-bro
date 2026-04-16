@@ -233,8 +233,9 @@ def analyze(spot: float, chain: dict, atm: int, time_to_expiry_mins: float,
     reasons_no = []
 
     if regime["regime"] == "RANGE-BOUND":
-        tradeability -= 40
-        reasons_no.append("Range-bound market — premium will decay")
+        # FIX #9: Don't fully block range — trap detector works IN ranges
+        tradeability -= 20  # was -40, now -20 (caution, not block)
+        reasons_no.append("Range-bound — reduced confidence (but traps possible)")
     if regime["regime"] == "VOLATILE":
         tradeability -= 20
         reasons_no.append("High volatility — wide SL needed")

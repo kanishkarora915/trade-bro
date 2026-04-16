@@ -241,14 +241,27 @@ def analyze(chain: dict, spot: float, atm: int, strike_step: int = 50,
     squeeze_direction = "NEUTRAL"
     squeeze_detail = ""
 
+    # FIX #4: Gamma squeeze needs price direction confirmation
+    # Negative GEX = dealers short gamma, but direction depends on WHERE gamma is concentrated
     if gamma_concentration > GAMMA_SQUEEZE_MIN:
-        squeeze_active = True
-        if net_gex < 0:
+        # Check price direction from spot history for confirmation
+        ce_gamma_near_atm = sum(g["gex"] for g in gamma_per_strike if g["side"] == "CE" and abs(g["strike"] - atm) <= strike_step * 2)
+        pe_gamma_near_atm = sum(g["gex"] for g in gamma_per_strike if g["side"] == "PE" and abs(g["strike"] - atm) <= strike_step * 2)
+
+        if net_gex < 0 and ce_gamma_near_atm > pe_gamma_near_atm:
+            # More CE gamma near ATM + negative GEX = dealers forced to buy on up-move
+            squeeze_active = True
             squeeze_direction = "BULLISH"
-            squeeze_detail = f"Negative GEX ({net_gex:,.0f}) + high gamma concentration ({gamma_concentration:.0%}) at {max_gamma_strike['strike'] if max_gamma_strike else 'ATM'}. Dealers SHORT gamma — forced to BUY on up-move. FEEDBACK LOOP = explosive up move."
-        else:
+            squeeze_detail = f"Negative GEX ({net_gex:,.0f}) + CE gamma dominant near ATM ({ce_gamma_near_atm:,.0f} vs PE {pe_gamma_near_atm:,.0f}). Dealers forced to BUY on up-move = BULLISH feedback loop."
+        elif net_gex < 0 and pe_gamma_near_atm > ce_gamma_near_atm:
+            # More PE gamma near ATM + negative GEX = dealers forced to sell on down-move
+            squeeze_active = True
             squeeze_direction = "BEARISH"
-            squeeze_detail = f"Positive GEX ({net_gex:,.0f}) + high concentration. Dealers LONG gamma — will sell on up-move, buy on down-move. Market likely to PIN near {atm}."
+            squeeze_detail = f"Negative GEX ({net_gex:,.0f}) + PE gamma dominant near ATM ({pe_gamma_near_atm:,.0f} vs CE {ce_gamma_near_atm:,.0f}). Dealers forced to SELL on down-move = BEARISH feedback loop."
+        elif net_gex > 0:
+            squeeze_active = False
+            squeeze_direction = "PINNING"
+            squeeze_detail = f"Positive GEX ({net_gex:,.0f}) — dealers LONG gamma, will mean-revert price. Market likely to PIN near {atm}."
 
     # ══════════════════════════════════════════
     #  4. DEALER DELTA RECONSTRUCTION

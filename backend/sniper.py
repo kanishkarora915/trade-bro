@@ -261,9 +261,9 @@ def analyze(confluence: dict, detectors: dict, seller: dict, vpin: dict,
                 _alerts.append({"time": now.strftime("%H:%M:%S"), "type": "OI_WARNING",
                                 "msg": f"Heavy OI buildup at {check_strike} ({oi_chg:+,}) — potential resistance"})
 
-        # Phase upgrade: SCOUT → BUILD
+        # Phase upgrade: SCOUT → BUILD (FIX #2: strict conditions, no averaging down)
         if _phase == "SCOUT" and net >= BUILD_NET and conf_score >= BUILD_SCORE:
-            if pnl_pct > -5:  # don't add to losing position beyond -5%
+            if pnl_pct > 0 and direction == _position.get("direction"):  # MUST be in profit AND same direction
                 add_lots = 2
                 _position["total_lots"] += add_lots
                 new_avg = (avg_entry * total_lots + current_ltp * add_lots) / (total_lots + add_lots)

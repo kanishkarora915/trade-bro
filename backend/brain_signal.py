@@ -8,7 +8,8 @@ IST = timezone(timedelta(hours=5, minutes=30))
 _last_signal_time: float = 0.0
 _last_signal_direction: str = ""
 _last_signal_strike: str = ""
-SIGNAL_COOLDOWN_SEC = 600  # 10 minutes minimum between signal changes
+SIGNAL_COOLDOWN_SEC = 300  # FIX #7: 5 min cooldown (was 10 min — too long)
+HARD_FLIP_SCORE = 80       # FIX #7: score 80+ can override cooldown for opposite direction
 
 
 def generate(confluence: dict, detector_results: dict, data: dict) -> dict:
@@ -83,7 +84,8 @@ def generate(confluence: dict, detector_results: dict, data: dict) -> dict:
         atm_dist = abs(strike - atm) / step
         proximity_score = max(0, 100 - atm_dist * 15)
 
-        heat = vol_score * 0.3 + oi_score * 0.3 + bp_score * 0.2 + proximity_score * 0.2
+        # FIX #12: Volume most reliable, OI least reliable
+        heat = vol_score * 0.40 + proximity_score * 0.30 + oi_score * 0.15 + bp_score * 0.15
         entry = (strike, heat, ltp, info)
 
         # Classify: ATM (±1 strike from ATM) vs OTM (further OTM)
@@ -143,8 +145,8 @@ def generate(confluence: dict, detector_results: dict, data: dict) -> dict:
     if _last_signal_time > 0 and elapsed < SIGNAL_COOLDOWN_SEC:
         # Signal already active — only allow SAME direction or significantly stronger opposite
         if direction != _last_signal_direction:
-            # Opposite direction — need much higher score to override
-            if score < threshold + 20:
+            # FIX #7: Allow hard flip at score 80+ (was threshold+20)
+            if score < HARD_FLIP_SCORE:
                 return {
                     "active": True,
                     "message": f"Holding previous {_last_signal_direction} signal — {int(SIGNAL_COOLDOWN_SEC - elapsed)}s cooldown remaining",

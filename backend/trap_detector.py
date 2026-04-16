@@ -24,11 +24,11 @@ from datetime import datetime, timezone, timedelta
 IST = timezone(timedelta(hours=5, minutes=30))
 
 # ── Config ──
-HISTORY_LENGTH = 60          # ~5 minutes of 5-second cycles
+HISTORY_LENGTH = 120         # FIX #11: ~10 minutes (was 60 = 5 min, missed bigger patterns)
 DROP_THRESHOLD = 0.25        # 25% drop from peak = trap
 CONSOL_RANGE_PCT = 0.10      # consolidation = price range < 10%
 CONSOL_MIN_CYCLES = 6        # minimum 6 cycles (~30 seconds) in consolidation
-OI_UNWIND_MIN = -3000        # OI must decrease by at least this much during consolidation
+OI_UNWIND_MIN = -10000       # FIX #11: OI must decrease 10K+ (was 3K — too sensitive)
 SMART_MONEY_BUY_PCT = 0.52   # buy % > 52% during consolidation = accumulation
 MIN_PREMIUM = 5              # minimum ₹5 premium to consider
 
@@ -118,7 +118,7 @@ def update_and_detect(chain: dict, spot: float, atm: int, strike_step: int = 50)
             current_price = prices[-1]
 
             # Drop must be from a recent peak (within last 40 cycles = ~3.5 min)
-            if peak_idx < len(prices) - 40:
+            if peak_idx < len(prices) - 80:  # FIX #11: extended to ~7 min (was 40 = 3.3 min)
                 continue  # peak too old
 
             drop_pct = (peak_price - current_price) / peak_price if peak_price > 0 else 0
