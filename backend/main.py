@@ -349,6 +349,18 @@ async def paper_report(period: str):
     return paper_trader.get_report(period)
 
 
+# --- Auto-Tune ---
+@app.get("/api/autotune/run")
+async def run_autotune():
+    from auto_tune import analyze_patterns
+    return analyze_patterns(days=7)
+
+@app.get("/api/autotune/latest")
+async def get_autotune():
+    from auto_tune import get_latest_report
+    return get_latest_report()
+
+
 # --- Trade Reports ---
 @app.get("/api/reports/daily")
 async def report_daily():

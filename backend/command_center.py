@@ -18,6 +18,7 @@ import os
 from datetime import datetime, timezone, timedelta
 from collections import deque
 import telegram_alerts
+from auto_tune import get_latest_report as get_tune_report
 import trade_tracker
 
 IST = timezone(timedelta(hours=5, minutes=30))
@@ -637,4 +638,5 @@ def generate(confluence: dict, detectors: dict, seller: dict, vpin: dict,
         "paper_trade_active": trade_tracker.get_active() is not None,
         "capital": CAPITAL,
         "max_sl_pct": f"{MAX_SL_PCT * 100:.0f}%",
+        "auto_tune": get_tune_report(),
     }

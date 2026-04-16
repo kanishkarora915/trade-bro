@@ -330,6 +330,31 @@ export default function CommandCenter({ state }: { state: any }) {
           </div>
         )}
 
+        {/* Auto-Tune Recommendations */}
+        {cmd.auto_tune?.recommendations?.length > 0 && (
+          <div className="border border-purple-800/30 bg-purple-950/10 rounded-xl p-3">
+            <div className="flex items-center justify-between mb-2">
+              <p className="text-[9px] text-purple-400 uppercase tracking-widest font-bold">Auto-Tune (Weekly Analysis)</p>
+              <span className="text-[9px] text-gray-500 font-mono">{cmd.auto_tune.trades_analyzed || 0} trades | {cmd.auto_tune.win_rate || 0}% WR</span>
+            </div>
+            {cmd.auto_tune.recommendations.slice(0, 4).map((r: any, i: number) => (
+              <div key={i} className="flex items-start gap-2 py-1.5 text-[10px] border-b border-gray-800/30 last:border-0">
+                <span className={`shrink-0 px-1.5 py-0.5 rounded text-[8px] font-bold ${
+                  r.priority === 'CRITICAL' ? 'bg-red-900/40 text-red-400' :
+                  r.priority === 'HIGH' ? 'bg-orange-900/40 text-orange-400' :
+                  r.priority === 'MODERATE' ? 'bg-yellow-900/40 text-yellow-400' :
+                  'bg-gray-800 text-gray-400'
+                }`}>{r.priority}</span>
+                <div>
+                  <p className="text-gray-300">{r.finding}</p>
+                  <p className="text-gray-500 text-[9px]">{r.action}</p>
+                  {r.adjustment && <p className="text-purple-400 text-[8px] font-mono mt-0.5">{r.adjustment}</p>}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+
         {/* Rules + Status */}
         <div className="border border-gray-800 rounded-xl p-2 text-[8px] text-gray-600 flex justify-between">
           <span>Capital: ₹10L</span>
